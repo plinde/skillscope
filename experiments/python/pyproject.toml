@@ -1,0 +1,20 @@
+[project]
+name = "skillscope"
+version = "0.1.0"
+description = "Claude Code skill-invocation analytics — local JSONL transcripts only, no Enterprise/OTel required"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "rich>=13.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+skillscope = "skillscope.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/skillscope"]

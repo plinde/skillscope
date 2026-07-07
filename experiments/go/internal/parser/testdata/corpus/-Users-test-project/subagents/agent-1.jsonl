@@ -1,0 +1,2 @@
+{"sessionId":"sess-1","timestamp":"2026-01-01T10:10:00Z","type":"user","cwd":"/Users/test/project","message":{"content":"<command-name>/subagenttool</command-name>"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T10:11:00Z","type":"assistant","cwd":"/Users/test/project","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"subagentskill"}}]}}

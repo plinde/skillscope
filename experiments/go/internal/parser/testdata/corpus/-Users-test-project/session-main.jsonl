@@ -1,0 +1,17 @@
+{"sessionId":"sess-1","timestamp":"2026-01-01T10:00:00Z","type":"user","cwd":"/Users/test/project","message":{"content":"<command-name>/mytool</command-name><command-args>foo bar</command-args>"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T10:01:00Z","type":"user","cwd":"/Users/test/project","message":{"content":"<command-name>/Help</command-name>"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T10:02:00Z","type":"assistant","cwd":"/Users/test/project","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"mytool","args":"baz"}}]}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T10:03:00Z","type":"assistant","cwd":"/Users/test/project","message":{"content":[{"type":"tool_use","name":"Skill","input":{"command":"othertool"}}]}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T10:04:00Z","type":"user","message":{"content":"<command-name>/anothertool</command-name>"}}
+not-json-at-all{{{
+{"timestamp":"2026-01-01T10:05:00Z","type":"user","cwd":"/x","message":{"content":"<command-name>/skiptool</command-name>"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T10:06:00Z","type":"assistant","cwd":"/Users/test/project","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T11:00:00Z","type":"user","cwd":"/Users/test/project","message":{"content":"This is a real user prompt about something important"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T11:01:00Z","type":"user","isMeta":true,"cwd":"/Users/test/project","message":{"content":"This meta line should not count as a prompt"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T11:02:00Z","type":"user","isSidechain":true,"cwd":"/Users/test/project","message":{"content":"This sidechain line should not count as a prompt"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T11:03:00Z","type":"user","toolUseResult":{"foo":"bar"},"cwd":"/Users/test/project","message":{"content":"This has a tool use result and should not count"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T11:04:00Z","type":"user","sourceToolAssistantUUID":"uuid-123","cwd":"/Users/test/project","message":{"content":"This has a source tool assistant uuid and should not count"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T11:05:00Z","type":"user","promptSource":"sdk","cwd":"/Users/test/project","message":{"content":"This is sdk generated and should not count as a real prompt"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T11:06:00Z","type":"user","promptSource":"system","cwd":"/Users/test/project","message":{"content":"This is system generated and should not count as a real prompt"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T11:07:00Z","type":"user","cwd":"/Users/test/project","message":{"content":"short"}}
+{"sessionId":"sess-1","timestamp":"2026-01-01T11:08:00Z","type":"user","cwd":"/Users/test/project","message":{"content":[{"type":"text","text":"This is a list-content real user prompt that should count"}]}}

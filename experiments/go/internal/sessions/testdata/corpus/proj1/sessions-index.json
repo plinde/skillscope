@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "originalPath": "/Users/test/proj1",
+  "entries": [
+    {
+      "sessionId": "sess-with-summary",
+      "fullPath": "/Users/test/proj1/sess-with-summary.jsonl",
+      "firstPrompt": "This is the first prompt text",
+      "summary": "A concise session summary",
+      "messageCount": 10,
+      "created": "2026-01-01T00:00:00Z",
+      "modified": "2026-01-02T00:00:00Z",
+      "gitBranch": "main",
+      "projectPath": "/Users/test/proj1",
+      "isSidechain": false
+    },
+    {
+      "sessionId": "sess-firstprompt-only",
+      "fullPath": "/Users/test/proj1/sess-firstprompt-only.jsonl",
+      "firstPrompt": "This session has no summary but a long first prompt that goes on and on well past eighty characters so it should be truncated with an ellipsis",
+      "summary": "",
+      "messageCount": 3,
+      "created": "2026-01-01T00:00:00Z",
+      "modified": "2026-01-02T00:00:00Z",
+      "gitBranch": "feature/x",
+      "projectPath": "/Users/test/proj1",
+      "isSidechain": false
+    },
+    {
+      "sessionId": "sess-neither",
+      "fullPath": "/Users/test/proj1/sess-neither.jsonl",
+      "firstPrompt": "",
+      "summary": "",
+      "messageCount": 1,
+      "created": "2026-01-01T00:00:00Z",
+      "modified": "2026-01-02T00:00:00Z",
+      "gitBranch": "",
+      "projectPath": "/Users/test/proj1",
+      "isSidechain": false
+    },
+    {
+      "sessionId": "",
+      "fullPath": "/Users/test/proj1/empty-id.jsonl",
+      "firstPrompt": "should be skipped, empty sessionId",
+      "summary": "",
+      "messageCount": 1,
+      "created": "2026-01-01T00:00:00Z",
+      "modified": "2026-01-02T00:00:00Z",
+      "gitBranch": "",
+      "projectPath": "/Users/test/proj1",
+      "isSidechain": false
+    }
+  ]
+}
