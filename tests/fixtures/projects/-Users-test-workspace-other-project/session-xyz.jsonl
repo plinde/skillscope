@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"session-xyz","timestamp":"2026-02-10T12:00:00Z","message":{"role":"user","content":"<command-name>/terraform</command-name>"}}
+{"type":"user","sessionId":"session-xyz","timestamp":"2026-02-10T12:05:00Z","message":{"role":"user","content":"<command-name>/help</command-name>"}}

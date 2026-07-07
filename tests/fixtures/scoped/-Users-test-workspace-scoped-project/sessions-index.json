@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "sessionId": "1a2b3c4d-1111-4000-8000-000000000001",
+      "summary": "Scoped worktree and CVE lookup",
+      "firstPrompt": "set up a worktree",
+      "gitBranch": "scoped-branch",
+      "projectPath": "/Users/test/workspace/scoped-project",
+      "modified": "2026-03-01T09:30:00Z"
+    },
+    {
+      "sessionId": "ffffffff-0000-4000-8000-00000000000f",
+      "summary": "Zero-invocation chat session",
+      "projectPath": "/Users/test/workspace/scoped-project",
+      "modified": "2026-03-03T08:30:00Z"
+    }
+  ]
+}

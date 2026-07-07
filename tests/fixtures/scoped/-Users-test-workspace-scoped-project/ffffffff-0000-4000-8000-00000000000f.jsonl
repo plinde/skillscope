@@ -1,0 +1,2 @@
+{"type":"summary","summary":"a session that never invoked any skill"}
+{"type":"user","sessionId":"ffffffff-0000-4000-8000-00000000000f","timestamp":"2026-03-03T08:00:00Z","cwd":"/Users/test/workspace/scoped-project","message":{"role":"user","content":"just chatting, no skills"}}

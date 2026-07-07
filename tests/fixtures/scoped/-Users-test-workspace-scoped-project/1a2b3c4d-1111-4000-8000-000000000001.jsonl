@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"1a2b3c4d-1111-4000-8000-000000000001","timestamp":"2026-03-01T09:00:00Z","cwd":"/Users/test/workspace/scoped-project","message":{"role":"user","content":"<command-name>/worktree</command-name><command-args>scoped-branch</command-args>"}}
+{"type":"assistant","sessionId":"1a2b3c4d-1111-4000-8000-000000000001","timestamp":"2026-03-01T09:05:00Z","cwd":"/Users/test/workspace/scoped-project","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"cve-lookup"}}]}}

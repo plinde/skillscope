@@ -1,0 +1,8 @@
+this is not valid json and must be skipped silently
+{"type":"user","sessionId":"session-abc","timestamp":"2026-01-01T09:00:00Z","cwd":"/Users/test/workspace/demo-project","message":{"role":"user","content":"<command-name>/worktree</command-name><command-args>feature-branch</command-args>"}}
+{"type":"user","sessionId":"session-abc","timestamp":"2026-01-01T09:05:00Z","cwd":"/Users/test/workspace/demo-project","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{"type":"assistant","sessionId":"session-abc","timestamp":"2026-01-01T09:10:00Z","cwd":"/Users/test/workspace/demo-project","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"cve-lookup"}}]}}
+{"type":"assistant","sessionId":"session-abc","timestamp":"2026-01-01T09:11:00Z","cwd":"/Users/test/workspace/demo-project","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","sessionId":"session-abc","timestamp":"2026-01-01T09:12:00Z","cwd":"/Users/test/workspace/demo-project","isMeta":true,"message":{"role":"user","content":"synthetic conversation title generator prompt text"}}
+{"type":"user","sessionId":"session-abc","timestamp":"2026-01-01T09:15:00Z","cwd":"/Users/test/workspace/demo-project","message":{"role":"user","content":"please help me set up a new worktree for this feature branch today"}}
+{"incomplete_json_object":

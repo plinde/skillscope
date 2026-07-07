@@ -1,0 +1,1 @@
+{"type":"assistant","sessionId":"session-abc-sub1","timestamp":"2026-01-01T09:20:00Z","cwd":"/Users/test/workspace/demo-project","message":{"role":"assistant","content":[{"type":"tool_use","name":"Skill","input":{"skill":"github-cli"}}]}}

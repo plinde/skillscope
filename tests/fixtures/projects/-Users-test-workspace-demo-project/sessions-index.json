@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "sessionId": "session-abc",
+      "summary": "Set up a worktree and looked up a CVE",
+      "firstPrompt": "help me set up a worktree",
+      "gitBranch": "feature-branch",
+      "messageCount": 6,
+      "isSidechain": false
+    }
+  ]
+}
