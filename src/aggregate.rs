@@ -95,7 +95,7 @@ pub fn sessions_for_skill(invs: &[SkillInvocation], skill: &str) -> Vec<SessionE
         }
     }
     let mut rows: Vec<SessionEntry> = sessions.into_values().collect();
-    rows.sort_by(|a, b| b.count.cmp(&a.count));
+    rows.sort_by_key(|a| std::cmp::Reverse(a.count));
     rows
 }
 
@@ -163,7 +163,7 @@ pub fn project_counts(invs: &[SkillInvocation]) -> BTreeMap<String, ProjectEntry
             .get(&project)
             .map(|m| m.iter().map(|(k, v)| (k.clone(), *v)).collect())
             .unwrap_or_default();
-        skills.sort_by(|a, b| b.1.cmp(&a.1));
+        skills.sort_by_key(|a| std::cmp::Reverse(a.1));
         skills.truncate(5);
         result.insert(
             project,

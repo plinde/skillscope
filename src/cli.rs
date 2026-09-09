@@ -153,7 +153,7 @@ pub fn cmd_summary(cli: &Cli) {
     let invs = load_invocations(cli);
     let counts = aggregate::skill_counts(&invs);
     let mut rows: Vec<_> = counts.into_iter().collect();
-    rows.sort_by(|a, b| b.1.total.cmp(&a.1.total));
+    rows.sort_by_key(|a| std::cmp::Reverse(a.1.total));
 
     if cli.json {
         let json_map: std::collections::BTreeMap<String, SkillCountsJson> = rows
@@ -288,7 +288,7 @@ pub fn cmd_projects(cli: &Cli) {
     let invs = load_invocations(cli);
     let counts = aggregate::project_counts(&invs);
     let mut rows: Vec<_> = counts.into_iter().collect();
-    rows.sort_by(|a, b| b.1.total.cmp(&a.1.total));
+    rows.sort_by_key(|a| std::cmp::Reverse(a.1.total));
 
     if cli.json {
         let json_map: std::collections::BTreeMap<String, ProjectRowJson> = rows

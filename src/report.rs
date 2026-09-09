@@ -151,7 +151,7 @@ pub fn build_report(
             last_seen: acc.last_seen,
         })
         .collect();
-    skills.sort_by(|a, b| b.total.cmp(&a.total));
+    skills.sort_by_key(|a| std::cmp::Reverse(a.total));
 
     // Per-session profile (input is already sorted by recency descending).
     let sessions: Vec<SessionProfileRow> = profiles
@@ -166,7 +166,7 @@ pub fn build_report(
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v))
                 .collect();
-            top_skills.sort_by(|a, b| b.1.cmp(&a.1));
+            top_skills.sort_by_key(|a| std::cmp::Reverse(a.1));
             top_skills.truncate(3);
             SessionProfileRow {
                 session_id: summary.session_id.clone(),
@@ -204,7 +204,7 @@ pub fn build_report(
                 last_ts: hits.iter().map(|i| i.timestamp).max().unwrap(),
             });
         }
-        rows.sort_by(|a, b| b.count.cmp(&a.count));
+        rows.sort_by_key(|a| std::cmp::Reverse(a.count));
         FocusReport {
             skill_name: skill.to_string(),
             sessions_invoked: rows.len(),
