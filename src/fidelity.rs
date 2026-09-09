@@ -511,7 +511,7 @@ pub fn run_fidelity(projects_dir: &Path, skills_dirs: Option<&[PathBuf]>) -> Fid
                 .join(" | "),
         })
         .collect();
-    under_triggered.sort_by(|a, b| b.count.cmp(&a.count));
+    under_triggered.sort_by_key(|a| std::cmp::Reverse(a.count));
 
     let mut over_triggered: Vec<FidelityFinding> = over_counts
         .into_iter()
@@ -525,7 +525,7 @@ pub fn run_fidelity(projects_dir: &Path, skills_dirs: Option<&[PathBuf]>) -> Fid
                 .join(" | "),
         })
         .collect();
-    over_triggered.sort_by(|a, b| b.count.cmp(&a.count));
+    over_triggered.sort_by_key(|a| std::cmp::Reverse(a.count));
 
     FidelityReport {
         under_triggered,

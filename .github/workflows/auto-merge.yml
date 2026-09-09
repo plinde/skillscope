@@ -1,0 +1,73 @@
+name: Auto-merge on green
+
+# Auto-merge a PR once its "CI" run is green and the PR has no merge conflicts.
+# Adopted from the plinde/agent-skills + agent-hooks + dotfiles + cron-launchagent
+# pattern (see the /myconfig skill): a PR here is an audit trail, not a review
+# gate, so a green conflict-free PR should never sit open waiting on a human.
+#
+# Why a workflow instead of GitHub's native auto-merge: native auto-merge only
+# waits on branch protection / rulesets, and this repo deliberately runs without
+# branch protection. This workflow does the gating itself — it fires after CI
+# completes and merges only PRs that are open, non-draft, and MERGEABLE.
+#
+# Scope: same-repo PRs only. workflow_run.pull_requests is not populated for
+# forks, so fork PRs are never auto-merged and always need a manual merge.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    # Only when the CI run itself passed and was triggered by a PR.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rebase-merge green, conflict-free PRs for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          # Open, non-draft PRs whose head commit is the one CI just passed on.
+          prs=$(gh pr list --repo "$REPO" --state open \
+                  --json number,headRefOid,isDraft \
+                  --jq ".[] | select(.headRefOid == \"$HEAD_SHA\" and .isDraft == false) | .number")
+
+          if [ -z "$prs" ]; then
+            echo "No open non-draft PR at $HEAD_SHA — nothing to merge."
+            exit 0
+          fi
+
+          for n in $prs; do
+            # GitHub computes mergeability asynchronously; poll briefly out of UNKNOWN.
+            state="UNKNOWN"
+            for _ in 1 2 3 4 5 6; do
+              state=$(gh pr view "$n" --repo "$REPO" --json mergeable --jq .mergeable)
+              [ "$state" != "UNKNOWN" ] && break
+              sleep 5
+            done
+
+            case "$state" in
+              MERGEABLE)
+                echo "PR #$n is green + MERGEABLE — rebase-merging."
+                gh pr merge "$n" --repo "$REPO" --rebase --delete-branch \
+                  || echo "::warning::merge of #$n failed (permissions or race)"
+                ;;
+              CONFLICTING)
+                echo "::notice::PR #$n has merge conflicts — skipping."
+                ;;
+              *)
+                echo "::notice::PR #$n mergeability still $state — skipping this run."
+                ;;
+            esac
+          done
