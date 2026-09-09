@@ -1,5 +1,6 @@
 ---
 name: skillscope
+version: 1.0.0
 description: Analyze Claude Code skill-invocation history from local transcripts on request — what skills fired, when, in what context, and how (user `/slash` vs model-proactive vs subagent). Use when the user asks to inspect a specific session ("what skills did session abc123 invoke and when"), audit a skill's usage ("is my-skill actually firing / when did it last run"), survey activity in a project/cwd, spot trends over time, or find installed-but-never-fired skills. Backed by the `skillscope` CLI over `~/.claude/projects/**/*.jsonl`; drive it non-interactively with `export --json | jq`. Local-only, no admin console or org API.
 ---
 
