@@ -1,4 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["local>plinde/orgroot//renovate/default"]
+  "extends": ["local>plinde/orgroot//renovate/default"],
+  "packageRules": [
+    {
+      "description": "The Rust version is pinned twice: rust-toolchain.toml for rustup/CI, .tool-versions for asdf. Two separate Renovate managers pick those up, so ungrouped they bump in two independent PRs and the pins drift until both land. Keep them in one PR.",
+      "matchManagers": ["rust-toolchain", "asdf"],
+      "matchDepNames": ["rust"],
+      "groupName": "rust toolchain"
+    }
+  ]
 }
