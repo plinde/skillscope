@@ -1,0 +1,20 @@
+# Pins the toolchain for anyone using rustup, including CI.
+#
+# Why pin at all: CI gates auto-merge, so a floating `stable` means a routine
+# upstream Rust release can introduce new clippy lints, turn CI red on code
+# nobody touched, and silently stall auto-merge until someone investigates.
+# That happened on the first CI run here — 1.92 locally passed clippy while
+# 1.98 in CI failed it at 10 sites.
+#
+# Keep this in sync with .tool-versions. Two files because two tools: rustup
+# reads this one (CI, and anyone using rustup directly), asdf reads that one and
+# shims cargo/rustc locally without consulting this file. Bump both together.
+#
+# Renovate's asdf manager should keep .tool-versions current. It has no built-in
+# manager for rust-toolchain.toml, so that one likely needs a customManagers
+# regex rule to track — unverified against the shared plinde/orgroot preset, so
+# check that a bump PR touches BOTH files before trusting it to.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
