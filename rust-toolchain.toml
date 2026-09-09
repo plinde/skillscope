@@ -10,10 +10,10 @@
 # reads this one (CI, and anyone using rustup directly), asdf reads that one and
 # shims cargo/rustc locally without consulting this file. Bump both together.
 #
-# Renovate's asdf manager should keep .tool-versions current. It has no built-in
-# manager for rust-toolchain.toml, so that one likely needs a customManagers
-# regex rule to track — unverified against the shared plinde/orgroot preset, so
-# check that a bump PR touches BOTH files before trusting it to.
+# Renovate tracks both natively, no custom rule needed: the `rust-toolchain`
+# manager matches rust-toolchain(.toml)?, and the `asdf` manager lists rust among
+# its supported tools. They are separate managers, though, so renovate.json
+# groups them into one PR — otherwise the two pins bump independently and drift.
 [toolchain]
 channel = "1.98.1"
 components = ["rustfmt", "clippy"]
