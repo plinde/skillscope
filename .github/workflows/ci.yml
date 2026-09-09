@@ -3,6 +3,12 @@ name: CI
 # Gates every PR. `auto-merge.yml` keys off this workflow's name — rename it
 # there too if you rename it here, or auto-merge silently stops firing.
 #
+# No third-party actions. GitHub's ubuntu runners ship rustup, and rustup reads
+# rust-toolchain.toml, so `rustup show` installs and selects the pinned version
+# with its components. That is the whole toolchain setup — a marketplace action
+# would only restate what the toolchain file already declares, and this repo
+# auto-merges green PRs, so anything on that path is trust surface worth cutting.
+#
 # Steps delegate to the Makefile rather than restating cargo invocations, so
 # `make fmt-check lint test` locally and CI cannot drift apart.
 
@@ -18,11 +24,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Install pinned toolchain
+        run: |
+          rustup show
+          cargo --version
+          cargo clippy --version
+          cargo fmt --version
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Format
         run: make fmt-check
