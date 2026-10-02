@@ -13,14 +13,20 @@ name: CI
 # `make fmt-check lint test` locally and CI cannot drift apart.
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -51,3 +57,47 @@ jobs:
 
       - name: Test
         run: make test
+      # Auto-merge on green (plinde convention, automerge skill v2). It runs as the last step of
+      # the gate job, so a green PR costs ONE billed job-minute instead of two (a separate
+      # workflow_run auto-merge job was billed its own 1-minute floor). Steps run only after
+      # every earlier step succeeded, so "reached this step" == "the gate is green".
+      # Same-repo PRs only: a fork PR's token is read-only and is never auto-merged.
+      # DRAFT_POLICY: ready = a green draft is marked ready and merged (no drafts in this repo);
+      #               skip  = drafts are held; marking ready fires ready_for_review -> re-run -> merge.
+      # MERGE_METHOD: rebase keeps per-commit history and `Host:` trailers; squash/merge if preferred.
+      # --match-head-commit refuses the merge if a newer commit landed after this run started.
+      - name: Auto-merge on green
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DRAFT_POLICY: skip
+          MERGE_METHOD: rebase
+        run: |
+          set -euo pipefail
+          if [ "$(gh pr view "$PR" --repo "$REPO" --json isDraft --jq .isDraft)" = "true" ]; then
+            if [ "$DRAFT_POLICY" = "ready" ]; then
+              echo "PR #$PR is a draft; marking ready (repo policy: no drafts)."
+              gh pr ready "$PR" --repo "$REPO" || { echo "::warning::could not mark #$PR ready; not merging."; exit 0; }
+            else
+              echo "::notice::PR #$PR is a draft; holding. Mark it ready to re-run the gate and merge."
+              exit 0
+            fi
+          fi
+          state="UNKNOWN"
+          for _ in 1 2 3 4 5 6; do
+            state=$(gh pr view "$PR" --repo "$REPO" --json mergeable --jq .mergeable)
+            [ "$state" != "UNKNOWN" ] && break
+            sleep 5
+          done
+          case "$state" in
+            MERGEABLE)
+              echo "PR #$PR is green + MERGEABLE; ${MERGE_METHOD}-merging."
+              gh pr merge "$PR" --repo "$REPO" "--$MERGE_METHOD" --delete-branch --match-head-commit "$HEAD_SHA" \
+                || echo "::warning::merge of #$PR failed (permissions, race, or a newer commit)"
+              ;;
+            CONFLICTING) echo "::notice::PR #$PR has merge conflicts; skipping." ;;
+            *) echo "::notice::PR #$PR mergeability still $state; skipping this run." ;;
+          esac
