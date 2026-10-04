@@ -6,7 +6,8 @@
 
 use crate::aggregate::{self, Granularity};
 use crate::fidelity::run_fidelity;
-use crate::models::{Origin, SkillInvocation, TriggerType};
+use crate::harness;
+use crate::models::{Harness, Origin, SkillInvocation, TriggerCounts, TriggerType};
 use crate::parser::iter_invocations;
 use crate::sessions::{load_session_index, session_branch, session_label};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
@@ -14,17 +15,42 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::path::PathBuf;
 
-fn default_projects_dir() -> PathBuf {
-    let home = std::env::var("HOME")
+fn home_dir() -> PathBuf {
+    std::env::var("HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/"));
-    home.join(".claude").join("projects")
+        .unwrap_or_else(|_| PathBuf::from("/"))
+}
+
+fn default_projects_dir() -> PathBuf {
+    home_dir().join(".claude").join("projects")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum OriginFilter {
     Main,
     Subagent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum HarnessFilter {
+    #[default]
+    Claude,
+    Codex,
+    Pi,
+    Opencode,
+    All,
+}
+
+impl HarnessFilter {
+    pub fn includes(self, harness: Harness) -> bool {
+        match self {
+            HarnessFilter::All => true,
+            HarnessFilter::Claude => harness == Harness::Claude,
+            HarnessFilter::Codex => harness == Harness::Codex,
+            HarnessFilter::Pi => harness == Harness::Pi,
+            HarnessFilter::Opencode => harness == Harness::Opencode,
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -50,6 +76,12 @@ pub struct Cli {
     /// Restrict to invocations from main-session or subagent transcripts.
     #[arg(long, value_enum, global = true)]
     pub origin: Option<OriginFilter>,
+
+    /// Which agent harness's history to read. `claude` (default) reads
+    /// Claude Code transcripts only; `codex`, `pi` and `opencode` read that
+    /// harness's session store; `all` reads every one that exists.
+    #[arg(long, value_enum, global = true, default_value_t = HarnessFilter::Claude)]
+    pub harness: HarnessFilter,
 
     /// Session scope: `.` picks a session for the current directory via
     /// fzf; a full UUID or >=8-char hex prefix opens that session directly.
@@ -120,9 +152,37 @@ impl Cli {
     }
 }
 
+/// Every invocation the selected harnesses recorded, before `--since` /
+/// `--origin` filtering.
+pub fn harness_invocations(cli: &Cli) -> Vec<SkillInvocation> {
+    let mut invs = Vec::new();
+    if cli.harness.includes(Harness::Claude) {
+        invs.extend(iter_invocations(&cli.resolved_projects_dir()));
+    }
+    let home = home_dir();
+    if cli.harness.includes(Harness::Codex) {
+        invs.extend(harness::iter_codex_invocations(
+            &home.join(".codex/sessions"),
+        ));
+    }
+    if cli.harness.includes(Harness::Pi) {
+        invs.extend(harness::iter_pi_invocations(
+            &home.join(".pi/agent/sessions"),
+        ));
+    }
+    if cli.harness.includes(Harness::Opencode) {
+        let db = home.join(".local/share/opencode/opencode.db");
+        match harness::iter_opencode_invocations(&db) {
+            Ok(found) => invs.extend(found),
+            Err(e) => eprintln!("skillscope: skipping opencode: {e}"),
+        }
+    }
+    invs
+}
+
 fn load_invocations(cli: &Cli) -> Vec<SkillInvocation> {
     let since = cli.resolved_since();
-    let mut invs = iter_invocations(&cli.resolved_projects_dir());
+    let mut invs = harness_invocations(cli);
     if let Some(since) = since {
         invs.retain(|inv| inv.timestamp >= since);
     }
@@ -142,8 +202,8 @@ fn print_json<T: Serialize>(data: &T) {
 #[derive(Serialize)]
 struct SkillCountsJson {
     total: usize,
-    user_slash: usize,
-    claude_proactive: usize,
+    #[serde(flatten)]
+    triggers: TriggerCounts,
     subagent: usize,
     first_seen: String,
     last_seen: String,
@@ -163,8 +223,7 @@ pub fn cmd_summary(cli: &Cli) {
                     name,
                     SkillCountsJson {
                         total: s.total,
-                        user_slash: s.user_slash,
-                        claude_proactive: s.claude_proactive,
+                        triggers: s.triggers,
                         subagent: s.subagent,
                         first_seen: s.first_seen.to_rfc3339(),
                         last_seen: s.last_seen.to_rfc3339(),
@@ -177,16 +236,26 @@ pub fn cmd_summary(cli: &Cli) {
     }
 
     println!(
-        "{:<30} {:>7} {:>12} {:>17} {:>10} {:>12} {:>12}",
-        "Skill", "Total", "User /slash", "Claude proactive", "Subagent", "First seen", "Last seen"
+        "{:<30} {:>7} {:>12} {:>11} {:>17} {:>12} {:>10} {:>12} {:>12}",
+        "Skill",
+        "Total",
+        "User /slash",
+        "User named",
+        "Claude proactive",
+        "Direct read",
+        "Subagent",
+        "First seen",
+        "Last seen"
     );
     for (name, stats) in rows {
         println!(
-            "{:<30} {:>7} {:>12} {:>17} {:>10} {:>12} {:>12}",
+            "{:<30} {:>7} {:>12} {:>11} {:>17} {:>12} {:>10} {:>12} {:>12}",
             name,
             stats.total,
-            stats.user_slash,
-            stats.claude_proactive,
+            stats.triggers.user_slash,
+            stats.triggers.user_named,
+            stats.triggers.claude_proactive,
+            stats.triggers.direct_read,
             stats.subagent,
             stats.first_seen.date_naive(),
             stats.last_seen.date_naive(),
@@ -418,10 +487,12 @@ pub fn cmd_report(cli: &Cli, skill: Option<&str>, cwd: Option<&std::path::Path>)
         report.sessions_total - report.sessions_with_invocations
     );
     println!();
-    println!("Trigger context: user-slash = typed /command; claude-proactive = model-invoked");
+    println!("Trigger context: slash = typed /command; named = Skill tool call the user asked for");
     println!(
-        "via the Skill tool (keyword/description trigger); subagent = fired inside a subagent."
+        "as /skill or $skill in prose; proactive = Skill tool call nobody asked for (keyword/"
     );
+    println!("description trigger); read = SKILL.md loaded with Read/Bash instead of the Skill");
+    println!("tool; subagent = fired inside a subagent.");
 
     if let Some(focus) = &report.focus {
         println!();
@@ -433,17 +504,19 @@ pub fn cmd_report(cli: &Cli, skill: Option<&str>, cwd: Option<&std::path::Path>)
             println!("  (never invoked from this directory in the selected window)");
         } else {
             println!(
-                "{:<50} {:>6} {:>7} {:>10} {:>9} {:>17}",
-                "Session", "Count", "Slash", "Proactive", "Subagent", "Last"
+                "{:<50} {:>6} {:>7} {:>7} {:>10} {:>6} {:>9} {:>17}",
+                "Session", "Count", "Slash", "Named", "Proactive", "Read", "Subagent", "Last"
             );
             for row in &focus.rows {
                 let label: String = row.label.chars().take(50).collect();
                 println!(
-                    "{:<50} {:>6} {:>7} {:>10} {:>9} {:>17}",
+                    "{:<50} {:>6} {:>7} {:>7} {:>10} {:>6} {:>9} {:>17}",
                     label,
                     row.count,
-                    row.user_slash,
-                    row.claude_proactive,
+                    row.triggers.user_slash,
+                    row.triggers.user_named,
+                    row.triggers.claude_proactive,
+                    row.triggers.direct_read,
                     row.subagent,
                     row.last_ts.format("%Y-%m-%d %H:%M"),
                 );
@@ -454,16 +527,27 @@ pub fn cmd_report(cli: &Cli, skill: Option<&str>, cwd: Option<&std::path::Path>)
     println!();
     println!("Per-skill usage across these sessions");
     println!(
-        "{:<30} {:>6} {:>7} {:>10} {:>9} {:>9} {:>12} {:>12}",
-        "Skill", "Total", "Slash", "Proactive", "Subagent", "Sessions", "First seen", "Last seen"
+        "{:<30} {:>6} {:>7} {:>7} {:>10} {:>6} {:>9} {:>9} {:>12} {:>12}",
+        "Skill",
+        "Total",
+        "Slash",
+        "Named",
+        "Proactive",
+        "Read",
+        "Subagent",
+        "Sessions",
+        "First seen",
+        "Last seen"
     );
     for s in &report.skills {
         println!(
-            "{:<30} {:>6} {:>7} {:>10} {:>9} {:>9} {:>12} {:>12}",
+            "{:<30} {:>6} {:>7} {:>7} {:>10} {:>6} {:>9} {:>9} {:>12} {:>12}",
             s.skill_name,
             s.total,
-            s.user_slash,
-            s.claude_proactive,
+            s.triggers.user_slash,
+            s.triggers.user_named,
+            s.triggers.claude_proactive,
+            s.triggers.direct_read,
             s.subagent,
             s.sessions,
             s.first_seen.date_naive(),
@@ -537,8 +621,13 @@ pub fn cmd_inventory(cli: &Cli, skill: Option<&str>, skills_dirs: &[PathBuf]) {
             println!("  Description: {desc}");
         }
         println!(
-            "  Invocations: {} total ({} user-slash, {} claude-proactive, {} in subagents)",
-            row.total_invocations, row.user_slash, row.claude_proactive, row.subagent
+            "  Invocations: {} total ({} user-slash, {} user-named, {} claude-proactive, {} direct-read, {} in subagents)",
+            row.total_invocations,
+            row.triggers.user_slash,
+            row.triggers.user_named,
+            row.triggers.claude_proactive,
+            row.triggers.direct_read,
+            row.subagent
         );
         match &row.last {
             Some(last) => {
@@ -551,11 +640,15 @@ pub fn cmd_inventory(cli: &Cli, skill: Option<&str>, skills_dirs: &[PathBuf]) {
                     last.trigger_type,
                     match last.trigger_type {
                         TriggerType::UserSlash => "typed /command",
+                        TriggerType::UserNamed =>
+                            "Skill tool call the user asked for by /name or $name",
                         TriggerType::ClaudeProactive =>
                             "model-invoked via Skill tool — keyword/description trigger",
+                        TriggerType::DirectRead => "SKILL.md read directly, not via the Skill tool",
                     }
                 );
                 println!("    Origin:    {}", last.origin);
+                println!("    Harness:   {}", last.harness);
                 if let Some(args) = &last.args {
                     let args: String = args.chars().take(120).collect();
                     println!("    Args:      {args}");
@@ -584,8 +677,16 @@ pub fn cmd_inventory(cli: &Cli, skill: Option<&str>, skills_dirs: &[PathBuf]) {
         never
     );
     println!(
-        "{:<34} {:<7} {:>6} {:>7} {:>10} {:>9} {:>17}  Last session",
-        "Skill", "Source", "Total", "Slash", "Proactive", "Subagent", "Last invoked"
+        "{:<34} {:<7} {:>6} {:>7} {:>7} {:>10} {:>6} {:>9} {:>17}  Last session",
+        "Skill",
+        "Source",
+        "Total",
+        "Slash",
+        "Named",
+        "Proactive",
+        "Read",
+        "Subagent",
+        "Last invoked"
     );
     for row in &rows {
         let (last_ts, last_session) = match &row.last {
@@ -597,12 +698,14 @@ pub fn cmd_inventory(cli: &Cli, skill: Option<&str>, skills_dirs: &[PathBuf]) {
         };
         let sym = if row.skill.symlinked { "@" } else { "" };
         println!(
-            "{:<34} {:<7} {:>6} {:>7} {:>10} {:>9} {:>17}  {}",
+            "{:<34} {:<7} {:>6} {:>7} {:>7} {:>10} {:>6} {:>9} {:>17}  {}",
             format!("{}{sym}", row.skill.name),
             row.skill.source,
             row.total_invocations,
-            row.user_slash,
-            row.claude_proactive,
+            row.triggers.user_slash,
+            row.triggers.user_named,
+            row.triggers.claude_proactive,
+            row.triggers.direct_read,
             row.subagent,
             last_ts,
             last_session,
@@ -622,6 +725,7 @@ struct InvocationJson {
     transcript_file: String,
     args: Option<String>,
     origin: Origin,
+    harness: Harness,
 }
 
 pub fn cmd_export(cli: &Cli) {
@@ -639,6 +743,7 @@ pub fn cmd_export(cli: &Cli) {
             transcript_file: inv.transcript_file,
             args: inv.args,
             origin: inv.origin,
+            harness: inv.harness,
         };
         if writeln!(lock, "{}", serde_json::to_string(&json_inv).unwrap()).is_err() {
             // Broken pipe (e.g. piped into `head`) — matches Python's
@@ -658,6 +763,7 @@ mod tests {
             since: since.map(String::from),
             json: false,
             origin: None,
+            harness: HarnessFilter::Claude,
             target: None,
             command: None,
         }

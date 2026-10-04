@@ -1,27 +1,30 @@
 # skillscope
 
-Claude Code skill-invocation analytics. Local-only: parses `~/.claude/projects/**/*.jsonl` transcripts directly — no Enterprise admin console, no org API, no OTLP sink required. Works for any individual Claude Code install.
+Claude Code skill-invocation analytics. Local-only: parses `~/.claude/projects/**/*.jsonl` transcripts directly (plus Codex, pi and opencode history with `--harness`) — no Enterprise admin console, no org API, no OTLP sink required. Works for any individual Claude Code install.
 
 Rust is the primary, shipped implementation (this directory), promoted after a bake-off against Go and Python POCs (see `experiments/`).
 
 ## Agent support
 
-Claude Code only, currently. skillscope parses `~/.claude/projects/**/*.jsonl` — Claude Code's
-specific transcript format (`sessionId`/`cwd`/`timestamp` per line, `<command-name>` tags for
-slash invocations, `Skill` tool_use blocks for proactive ones, `sessions-index.json` per
-project).
+Claude Code by default. `--harness` selects whose history to read:
 
-Codex (`~/.codex/sessions/`) and OpenCode (`~/.local/share/opencode/`) both log equivalent
-per-session JSONL/JSON transcripts with a comparable shape (turn-by-turn messages, tool calls,
-timestamps, cwd). Adding either as a second `Origin`/data source is expected to be a parser +
-model addition, not a rearchitecture: implement a `parser::<agent>` module producing the same
-`SkillInvocation` (or agent-equivalent "tool/command invocation") struct the aggregation,
-fidelity, and TUI layers already consume, and gate it behind a `--agent claude|codex|opencode`
-flag or auto-detection by which directory exists. No PRs open for this yet.
+| `--harness` | Source | What counts as a skill use |
+|---|---|---|
+| `claude` (default) | `~/.claude/projects/**/*.jsonl` | every trigger type below |
+| `codex` | `~/.codex/sessions/**/*.jsonl` rollouts | `direct-read`: a `function_call` / `custom_tool_call` whose arguments reference `skills/<name>/SKILL.md` |
+| `pi` | `~/.pi/agent/sessions/*/*.jsonl` | `direct-read`: an assistant `toolCall` whose arguments reference a SKILL.md |
+| `opencode` | `~/.local/share/opencode/opencode.db` | `claude-proactive`: a call to opencode's native `skill` tool (read via the `sqlite3` CLI) |
+| `all` | every store that exists | — |
+
+Codex and pi have no Skill tool — an agent uses a skill by reading its file — so only tool-call
+inputs are matched. Codex's model-visible skill catalog lists every installed SKILL.md path, so
+grepping whole lines would count every skill in every session. Session-scoped modes (`skillscope .`,
+`skillscope <session-id>`), `report` and `fidelity` stay Claude Code-only.
 
 ## What it does
 
-- **Per-skill usage counts** with trigger-type breakdown (user `/slash` vs model-proactive `Skill` tool_use)
+- **Per-skill usage counts** with trigger-type breakdown: user `/slash`, user-named (Skill tool
+  call the user asked for by name), model-proactive `Skill` tool_use, and direct SKILL.md reads
 - **Session-level drill-down** — which sessions fired a skill, in which project/cwd
 - **Session-scoped modes** — `skillscope .` (fzf picker over sessions for the current cwd) and
   `skillscope <session-id>` (full UUID or `>=8`-char hex prefix) open a TUI scoped to one session,
@@ -68,21 +71,39 @@ skillscope fidelity           # trigger-fidelity report
 skillscope report [skill]     # per-cwd session survey with trigger context
 skillscope inventory [skill]  # installed-skill inventory joined against invocation history
 skillscope export             # JSON export of normalized invocations
+
+skillscope summary --harness all   # include Codex, pi and opencode history (default: claude)
 ```
 
 ## Data sources (JSONL schema, confirmed against live transcripts)
 
-1. **User slash invocation** — `type:"user"` line, `message.content` is a string containing
-   `<command-name>/foo</command-name>` (plus `<command-message>`, `<command-args>`).
-2. **Model-proactive invocation** — `type:"assistant"` line, `message.content[]` entry with
-   `type:"tool_use"`, `name:"Skill"`, `input.skill` = skill name, optional `input.args`.
-3. **Subagent transcripts** — `<project>/<session-uuid>/subagents/agent-*.jsonl`, same schema,
+1. **User slash invocation** (`user-slash`) — `type:"user"` line, `message.content` is a string
+   containing `<command-name>/foo</command-name>` (plus `<command-message>`, `<command-args>`).
+2. **Skill tool call** — `type:"assistant"` line, `message.content[]` entry with
+   `type:"tool_use"`, `name:"Skill"`, `input.skill` = skill name, optional `input.args`. Split by
+   the most recent real user prose before it:
+   - **`user-named`** — that prose names the skill as `/foo` or `$foo` (case-insensitive; for a
+     plugin skill `plugin:foo`, `/foo` counts too). The user asked for it; the model ran it.
+   - **`claude-proactive`** — nothing asked for it; the description/keyword trigger fired.
+
+   "Real user prose" is the text of a `type:"user"` line minus `<system-reminder>` blocks, and
+   skips tool results, `isMeta` lines, skill bodies (`Base directory for this skill…`),
+   interrupt markers, and anything carrying `<command-name>`, `<task-notification>`,
+   `<cross-session-message`, or local-command output. A typed `/command` line counts as the
+   user's latest input. Mentions must be whole tokens: `~/x/foo`, `/foo-bar`, `/foo.md` don't
+   name `foo`.
+3. **Direct read** (`direct-read`) — any other assistant `tool_use` (Read, Bash, Grep, …) whose
+   input contains `skills/<name>/SKILL.md`. One record per skill per message (Claude Code writes
+   a message's content blocks as separate lines sharing `message.id`). Writes/edits and
+   delegations (`Agent`, `Task`, `SendMessage`) are not reads.
+4. **Subagent transcripts** — `<project>/<session-uuid>/subagents/agent-*.jsonl`, same schema,
    tagged with `origin: subagent`.
-4. **`sessions-index.json`** — Claude Code's own per-project session index
+5. **`sessions-index.json`** — Claude Code's own per-project session index
    (`firstPrompt`/`summary`/`gitBranch`/`modified`/`projectPath`), joined for friendlier session
    labels and recency sorting.
 
-Each transcript line also carries `sessionId`, `cwd`, `timestamp` (ISO 8601).
+Each transcript line also carries `sessionId`, `cwd`, `timestamp` (ISO 8601). Every exported
+record carries `harness` (`claude`, `codex`, `pi`, `opencode`).
 
 ## Data retention (read this before trusting long-range trends)
 
@@ -116,8 +137,9 @@ sessions."
 
 ```
 src/
-├── models.rs        # SkillInvocation, Origin, TriggerType
+├── models.rs        # SkillInvocation, Origin, TriggerType, Harness
 ├── parser.rs        # JSONL streaming extraction (main + subagent + scoped)
+├── harness.rs       # Codex, pi and opencode session stores
 ├── aggregate.rs      # counts, trigger breakdown, time-series, per-project rollups
 ├── sessions.rs        # sessions-index.json join
 ├── sessionscan.rs      # cwd -> session discovery for the `.` picker

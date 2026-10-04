@@ -19,7 +19,7 @@ fn main() {
 
     match &cli.command {
         None => {
-            let invs = parser::iter_invocations(&cli.resolved_projects_dir());
+            let invs = skillscope::cli::harness_invocations(&cli);
             let index = sessions::load_session_index(&cli.resolved_projects_dir());
             if let Err(e) = tui::run(invs, index) {
                 eprintln!("TUI error: {e}");

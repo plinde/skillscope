@@ -9,11 +9,12 @@
 //! (`<project>/<session-uuid>/subagents/agent-*.jsonl`) that the Python
 //! reference does not cover; those invocations get `Origin::Subagent`.
 
-use crate::models::{Origin, SkillInvocation, TriggerType, UserPrompt};
+use crate::models::{Harness, Origin, SkillInvocation, TriggerType, UserPrompt};
 use chrono::{DateTime, Utc};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -58,8 +59,184 @@ static COMMAND_NAME_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"<command-name>\s*/?([^<\s]+)\s*</command-name>").unwrap());
 static COMMAND_ARGS_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"<command-args>([^<]*)</command-args>").unwrap());
+/// A skill file path inside a tool call's input. The name class rules out
+/// globs and placeholders (`skills/*/SKILL.md`, `skills/<name>/SKILL.md`).
+static SKILL_PATH_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"skills/([A-Za-z0-9][A-Za-z0-9_.:-]*)/SKILL\.md").unwrap());
+static SYSTEM_REMINDER_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?s)<system-reminder>.*?</system-reminder>").unwrap());
 
-fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
+/// Markers of harness-injected text riding in a `type:"user"` line — none
+/// of it is something the user typed.
+const INJECTED_MARKERS: &[&str] = &[
+    "<command-name>",
+    "<task-notification>",
+    "<cross-session-message",
+    "system-reminder",
+    "<local-command-stdout>",
+    "<local-command-caveat>",
+];
+
+/// Tool calls (lowercased, across harnesses) that touch a SKILL.md without
+/// loading it: authoring the file, or handing its path to a delegate whose
+/// own read lands in its own transcript.
+const NON_READ_TOOLS: &[&str] = &[
+    "skill",
+    "write",
+    "edit",
+    "multiedit",
+    "notebookedit",
+    "apply_patch",
+    "agent",
+    "task",
+    "sendmessage",
+];
+
+pub(crate) fn is_non_read_tool(name: &str) -> bool {
+    NON_READ_TOOLS.contains(&name.to_lowercase().as_str())
+}
+
+/// Distinct skill names whose `skills/<name>/SKILL.md` appears in `input`,
+/// in first-seen order.
+pub(crate) fn skill_paths_in(input: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for cap in SKILL_PATH_RE.captures_iter(input) {
+        let name = cap[1].to_string();
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// The user-typed prose in one `type:"user"` line's content, or None when
+/// the line carries nothing the user wrote (tool results, slash-command
+/// envelopes, task notifications, skill bodies). `<system-reminder>` blocks
+/// are stripped rather than disqualifying, since the harness appends them to
+/// real prompts.
+fn user_prose(content: &Value) -> Option<String> {
+    let texts: Vec<&str> = match content {
+        Value::String(s) => vec![s.as_str()],
+        Value::Array(items) => items
+            .iter()
+            .filter(|i| i.get("type").and_then(|v| v.as_str()) == Some("text"))
+            .filter_map(|i| i.get("text").and_then(|v| v.as_str()))
+            .collect(),
+        _ => return None,
+    };
+    let mut prose = String::new();
+    for text in texts {
+        let text = SYSTEM_REMINDER_RE.replace_all(text, "");
+        let text = text.trim();
+        if text.is_empty()
+            || text.starts_with("Base directory for this skill")
+            || text.starts_with("[Request interrupted")
+            || INJECTED_MARKERS.iter().any(|m| text.contains(m))
+        {
+            continue;
+        }
+        if !prose.is_empty() {
+            prose.push('\n');
+        }
+        prose.push_str(text);
+    }
+    (!prose.is_empty()).then_some(prose)
+}
+
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '-' || c == '_'
+}
+
+/// True when the `/` or `$` sigil at byte `at` starts a token rather than
+/// sitting inside a path or word (`~/x/skillscope`, `a$b`). A plugin
+/// namespace counts as the token start, so `/plugin:name` names `name`.
+fn sigil_starts_token(text: &str, at: usize) -> bool {
+    let mut before = text[..at].char_indices().rev();
+    match before.next() {
+        None => true,
+        Some((_, c)) if c.is_whitespace() => true,
+        Some((_, c)) if is_name_char(c) || "/.~:$\\@".contains(c) => false,
+        Some(_) => true,
+    }
+}
+
+/// True when the mention ending at byte `end` is a whole token: `/foo` but
+/// not `/foo-bar`, `/foo/src` or `/foo.md` (`/foo.` ends a sentence).
+fn token_ends(text: &str, end: usize) -> bool {
+    let mut after = text[end..].chars();
+    match after.next() {
+        None => true,
+        Some(c) if is_name_char(c) || c == ':' || c == '/' => false,
+        Some('.') => !after.next().is_some_and(char::is_alphanumeric),
+        Some(_) => true,
+    }
+}
+
+fn mentions_name(text: &str, name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    for sigil in ['/', '$'] {
+        let needle = format!("{sigil}{name}");
+        if text
+            .match_indices(&needle)
+            .any(|(i, _)| sigil_starts_token(text, i) && token_ends(text, i + needle.len()))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `prose` (any case) names `skill` as `/skill` or `$skill`. For a
+/// plugin-namespaced skill (`plugin:name`) the bare `name` also counts, and
+/// for a bare skill a `plugin:`-qualified mention does.
+pub(crate) fn prose_names_skill(prose: &str, skill: &str) -> bool {
+    let prose = prose.to_lowercase();
+    let skill = skill.to_lowercase();
+    if mentions_name(&prose, &skill) {
+        return true;
+    }
+    if let Some((_, short)) = skill.split_once(':')
+        && mentions_name(&prose, short)
+    {
+        return true;
+    }
+    mentions_qualified(&prose, skill.rsplit(':').next().unwrap_or(&skill))
+}
+
+/// `/<plugin>:<name>` or `$<plugin>:<name>` for any plugin namespace.
+fn mentions_qualified(text: &str, name: &str) -> bool {
+    let needle = format!(":{name}");
+    for (i, _) in text.match_indices(&needle) {
+        // Walk back over the plugin name to its sigil.
+        let prefix = &text[..i];
+        let plugin_start = prefix
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| is_name_char(*c))
+            .last()
+            .map(|(j, _)| j);
+        let Some(plugin_start) = plugin_start else {
+            continue;
+        };
+        let Some(sigil) = prefix[..plugin_start].chars().next_back() else {
+            continue;
+        };
+        if sigil != '/' && sigil != '$' {
+            continue;
+        }
+        if !sigil_starts_token(text, plugin_start - sigil.len_utf8()) {
+            continue;
+        }
+        if token_ends(text, i + needle.len()) {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
     // Python: datetime.fromisoformat(raw.replace("Z", "+00:00"))
     let normalized = raw.replace('Z', "+00:00");
     DateTime::parse_from_rfc3339(&normalized)
@@ -81,7 +258,7 @@ fn decode_project_dir(dir_name: &str) -> String {
     }
 }
 
-fn load_line(line: &str) -> Option<Value> {
+pub(crate) fn load_line(line: &str) -> Option<Value> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
@@ -174,6 +351,13 @@ fn extract_invocations_from_file(
         return;
     };
     let fallback = fallback_project_path(jsonl_path, origin);
+    let transcript_file = jsonl_path.to_string_lossy().to_string();
+    // The latest thing the user actually typed — decides user-named vs
+    // claude-proactive for the Skill calls that follow it.
+    let mut last_prose: Option<String> = None;
+    // (message id, skill) pairs already recorded as direct reads. Claude
+    // Code writes each content block of one message as its own line.
+    let mut seen_reads: HashSet<(String, String)> = HashSet::new();
     let reader = BufReader::new(file);
     for raw_line in reader.lines() {
         let Ok(raw_line) = raw_line else { continue };
@@ -205,16 +389,21 @@ fn extract_invocations_from_file(
 
         match line_type {
             Some("user") => {
-                let Some(content) = message.get("content").and_then(|v| v.as_str()) else {
-                    continue;
-                };
-                let Some(name_match) = COMMAND_NAME_RE.captures(content) else {
+                let content = message.get("content");
+                let command = content
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| COMMAND_NAME_RE.captures(s).map(|m| (s, m)));
+                let Some((content, name_match)) = command else {
+                    let is_meta = data
+                        .get("isMeta")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if !is_meta && let Some(prose) = content.and_then(user_prose) {
+                        last_prose = Some(prose);
+                    }
                     continue;
                 };
                 let skill_name = name_match.get(1).unwrap().as_str().trim().to_string();
-                if skill_name.is_empty() || is_excluded_command(&skill_name) {
-                    continue;
-                }
                 let args = COMMAND_ARGS_RE.captures(content).and_then(|m| {
                     let text = m.get(1).unwrap().as_str().trim();
                     if text.is_empty() {
@@ -223,28 +412,67 @@ fn extract_invocations_from_file(
                         Some(text.to_string())
                     }
                 });
+                // A typed command is the user's latest input, built-in or not.
+                last_prose = Some(format!(
+                    "/{skill_name} {}",
+                    args.as_deref().unwrap_or_default()
+                ));
+                if skill_name.is_empty() || is_excluded_command(&skill_name) {
+                    continue;
+                }
                 out.push(SkillInvocation {
                     skill_name,
                     trigger_type: TriggerType::UserSlash,
                     session_id: session_id.to_string(),
                     project_path,
                     timestamp,
-                    transcript_file: jsonl_path.to_string_lossy().to_string(),
+                    transcript_file: transcript_file.clone(),
                     args,
                     origin,
+                    harness: Harness::Claude,
                 });
             }
             Some("assistant") => {
                 let Some(content) = message.get("content").and_then(|v| v.as_array()) else {
                     continue;
                 };
+                let message_key = message
+                    .get("id")
+                    .or_else(|| data.get("uuid"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(raw_ts)
+                    .to_string();
                 for entry in content {
                     let Some(entry) = entry.as_object() else {
                         continue;
                     };
-                    if entry.get("type").and_then(|v| v.as_str()) != Some("tool_use")
-                        || entry.get("name").and_then(|v| v.as_str()) != Some("Skill")
-                    {
+                    if entry.get("type").and_then(|v| v.as_str()) != Some("tool_use") {
+                        continue;
+                    }
+                    let tool_name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    if tool_name != "Skill" {
+                        if is_non_read_tool(tool_name) {
+                            continue;
+                        }
+                        let Some(input) = entry.get("input") else {
+                            continue;
+                        };
+                        for skill_name in skill_paths_in(&input.to_string()) {
+                            if !seen_reads.insert((message_key.clone(), skill_name.clone())) {
+                                continue;
+                            }
+                            out.push(SkillInvocation {
+                                skill_name,
+                                trigger_type: TriggerType::DirectRead,
+                                session_id: session_id.to_string(),
+                                project_path: project_path.clone(),
+                                timestamp,
+                                transcript_file: transcript_file.clone(),
+                                args: None,
+                                origin,
+                                harness: Harness::Claude,
+                            });
+                        }
                         continue;
                     }
                     let Some(tool_input) = entry.get("input").and_then(|v| v.as_object()) else {
@@ -265,15 +493,24 @@ fn extract_invocations_from_file(
                         .and_then(|v| v.as_str())
                         .filter(|s| !s.is_empty())
                         .map(String::from);
+                    let trigger_type = if last_prose
+                        .as_deref()
+                        .is_some_and(|p| prose_names_skill(p, skill_name))
+                    {
+                        TriggerType::UserNamed
+                    } else {
+                        TriggerType::ClaudeProactive
+                    };
                     out.push(SkillInvocation {
                         skill_name: skill_name.to_string(),
-                        trigger_type: TriggerType::ClaudeProactive,
+                        trigger_type,
                         session_id: session_id.to_string(),
                         project_path: project_path.clone(),
                         timestamp,
-                        transcript_file: jsonl_path.to_string_lossy().to_string(),
+                        transcript_file: transcript_file.clone(),
                         args,
                         origin,
+                        harness: Harness::Claude,
                     });
                 }
             }
@@ -550,6 +787,171 @@ mod tests {
         write_main_transcript(tmp.path(), "-repo-one", &[line]);
         let invs = iter_invocations_main_only(tmp.path());
         assert!(invs.is_empty());
+    }
+
+    // -- user-named: Skill calls the user asked for in prose -----------------
+
+    fn user_text_line(content_json: &str) -> String {
+        format!(
+            r#"{{"type":"user","sessionId":"sess-1","timestamp":"2026-01-01T12:00:00Z","cwd":"/repo","message":{{"role":"user","content":{content_json}}}}}"#
+        )
+    }
+
+    fn triggers_for(lines: &[String]) -> Vec<(String, TriggerType)> {
+        let tmp = TempDir::new().unwrap();
+        write_main_transcript(tmp.path(), "-repo-one", lines);
+        iter_invocations_main_only(tmp.path())
+            .into_iter()
+            .map(|i| (i.skill_name, i.trigger_type))
+            .collect()
+    }
+
+    #[test]
+    fn skill_call_named_by_preceding_prose_is_user_named() {
+        let got = triggers_for(&[
+            user_text_line(r#""please use /SkillScope on this""#),
+            claude_proactive_line("sess-1", "skillscope"),
+        ]);
+        assert_eq!(got, vec![("skillscope".into(), TriggerType::UserNamed)]);
+    }
+
+    #[test]
+    fn dollar_sigil_and_plugin_short_name_count_as_named() {
+        let got = triggers_for(&[
+            user_text_line(r#"[{"type":"text","text":"run $feature-spec then /github-cli"}]"#),
+            claude_proactive_line("sess-1", "feature:feature-spec"),
+            claude_proactive_line("sess-1", "basiq-tools:github-cli"),
+        ]);
+        assert!(got.iter().all(|(_, t)| *t == TriggerType::UserNamed));
+        // A plugin-qualified mention names the bare skill too.
+        let got = triggers_for(&[
+            user_text_line(r#""try /basiq-tools:github-cli""#),
+            claude_proactive_line("sess-1", "github-cli"),
+        ]);
+        assert_eq!(got[0].1, TriggerType::UserNamed);
+    }
+
+    #[test]
+    fn only_the_most_recent_real_prose_counts() {
+        let got = triggers_for(&[
+            user_text_line(r#""use /worktree""#),
+            user_text_line(r#""now something else entirely""#),
+            claude_proactive_line("sess-1", "worktree"),
+        ]);
+        assert_eq!(got[0].1, TriggerType::ClaudeProactive);
+    }
+
+    #[test]
+    fn injected_user_lines_do_not_replace_the_last_prose() {
+        let got = triggers_for(&[
+            user_text_line(r#""use /worktree please""#),
+            // tool results, task notifications, skill bodies, meta lines
+            user_text_line(r#"[{"type":"tool_result","content":"no mention"}]"#),
+            user_text_line(r#""<task-notification>done</task-notification>""#),
+            user_text_line(r#"[{"type":"text","text":"Base directory for this skill: /x"}]"#),
+            r#"{"type":"user","isMeta":true,"sessionId":"sess-1","timestamp":"2026-01-01T12:00:00Z","message":{"role":"user","content":"meta text"}}"#.to_string(),
+            claude_proactive_line("sess-1", "worktree"),
+        ]);
+        assert_eq!(got[0].1, TriggerType::UserNamed);
+    }
+
+    #[test]
+    fn system_reminders_and_paths_do_not_name_a_skill() {
+        let got = triggers_for(&[
+            user_text_line(
+                r#""look at ~/workspace/plinde/worktree/src and foo/worktree.md <system-reminder>skills: /worktree</system-reminder>""#,
+            ),
+            claude_proactive_line("sess-1", "worktree"),
+        ]);
+        assert_eq!(got[0].1, TriggerType::ClaudeProactive);
+    }
+
+    #[test]
+    fn mention_matching_respects_token_boundaries() {
+        assert!(prose_names_skill("use /aws.", "aws"));
+        assert!(prose_names_skill("(`/aws`)", "aws"));
+        assert!(!prose_names_skill("use /aws-quota-increase", "aws"));
+        assert!(!prose_names_skill("see /aws.md", "aws"));
+        assert!(!prose_names_skill("path a/aws b", "aws"));
+        assert!(!prose_names_skill("cost$aws", "aws"));
+    }
+
+    #[test]
+    fn a_typed_slash_command_becomes_the_latest_prose() {
+        let got = triggers_for(&[
+            user_text_line(r#""use /worktree""#),
+            user_slash_line("sess-1", "codex", Some("review it")),
+            claude_proactive_line("sess-1", "worktree"),
+        ]);
+        assert_eq!(got[0], ("codex".into(), TriggerType::UserSlash));
+        assert_eq!(got[1].1, TriggerType::ClaudeProactive);
+    }
+
+    // -- direct-read: SKILL.md loaded without the Skill tool -----------------
+
+    fn tool_use_line(message_id: &str, name: &str, input_json: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","sessionId":"sess-1","timestamp":"2026-01-02T00:00:00Z","cwd":"/repo","message":{{"id":"{message_id}","role":"assistant","content":[{{"type":"tool_use","name":"{name}","input":{input_json}}}]}}}}"#
+        )
+    }
+
+    #[test]
+    fn reading_a_skill_md_is_a_direct_read() {
+        let got = triggers_for(&[
+            tool_use_line(
+                "m1",
+                "Read",
+                r#"{"file_path":"/u/.agents/skills/github-cli/SKILL.md"}"#,
+            ),
+            tool_use_line(
+                "m2",
+                "Bash",
+                r#"{"command":"sed -n 1,80p ~/.claude/plugins/cache/basiq/feature/abc/skills/feature-spec/SKILL.md"}"#,
+            ),
+        ]);
+        assert_eq!(
+            got,
+            vec![
+                ("github-cli".into(), TriggerType::DirectRead),
+                ("feature-spec".into(), TriggerType::DirectRead),
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_reads_dedupe_per_message_across_content_block_lines() {
+        // Claude Code writes each content block of one message as its own
+        // line, all sharing message.id.
+        let got = triggers_for(&[
+            tool_use_line("m1", "Read", r#"{"file_path":"skills/aws/SKILL.md"}"#),
+            tool_use_line(
+                "m1",
+                "Bash",
+                r#"{"command":"cat skills/aws/SKILL.md skills/mfa/SKILL.md"}"#,
+            ),
+            tool_use_line("m2", "Read", r#"{"file_path":"skills/aws/SKILL.md"}"#),
+        ]);
+        let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["aws", "mfa", "aws"]);
+    }
+
+    #[test]
+    fn writes_delegations_and_globs_are_not_direct_reads() {
+        let got = triggers_for(&[
+            tool_use_line(
+                "m1",
+                "Write",
+                r#"{"file_path":"skills/new/SKILL.md","content":"x"}"#,
+            ),
+            tool_use_line("m2", "Edit", r#"{"file_path":"skills/new/SKILL.md"}"#),
+            tool_use_line("m3", "Agent", r#"{"prompt":"read skills/aws/SKILL.md"}"#),
+            tool_use_line(
+                "m4",
+                "Bash",
+                r#"{"command":"ls skills/*/SKILL.md skills/<name>/SKILL.md"}"#,
+            ),
+        ]);
+        assert!(got.is_empty(), "{got:?}");
     }
 
     // -- noise filters (extract_prompts_from_file) ----------------------------

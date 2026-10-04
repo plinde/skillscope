@@ -19,7 +19,7 @@
 //! lands the under-triggered list at 25 skills, within the spec's ~10-30
 //! target range, with evidence dominated by genuine skill-relevant prompts.
 
-use crate::models::{SkillDefinition, UserPrompt};
+use crate::models::{SkillDefinition, TriggerType, UserPrompt};
 use crate::parser::{iter_invocations_main_only, iter_user_prompts};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -422,7 +422,12 @@ pub fn run_fidelity(projects_dir: &Path, skills_dirs: Option<&[PathBuf]>) -> Fid
         .collect();
 
     let mut session_invocations: HashMap<String, HashSet<String>> = HashMap::new();
+    // Only invocations that went through the trigger machinery the skill
+    // description drives; a direct SKILL.md read bypasses it.
     for inv in iter_invocations_main_only(projects_dir) {
+        if inv.trigger_type == TriggerType::DirectRead {
+            continue;
+        }
         session_invocations
             .entry(inv.session_id)
             .or_default()
