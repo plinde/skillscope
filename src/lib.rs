@@ -6,6 +6,7 @@ pub mod aggregate;
 pub mod cli;
 pub mod fidelity;
 pub mod fzf;
+pub mod harness;
 pub mod inventory;
 pub mod models;
 pub mod parser;

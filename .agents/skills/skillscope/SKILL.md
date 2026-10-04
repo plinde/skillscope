@@ -1,7 +1,7 @@
 ---
 name: skillscope
-version: 1.0.0
-description: Analyze Claude Code skill-invocation history from local transcripts on request — what skills fired, when, in what context, and how (user `/slash` vs model-proactive vs subagent). Use when the user asks to inspect a specific session ("what skills did session abc123 invoke and when"), audit a skill's usage ("is my-skill actually firing / when did it last run"), survey activity in a project/cwd, spot trends over time, or find installed-but-never-fired skills. Backed by the `skillscope` CLI over `~/.claude/projects/**/*.jsonl`; drive it non-interactively with `export --json | jq`. Local-only, no admin console or org API.
+version: 1.1.0
+description: Analyze Claude Code skill-invocation history from local transcripts on request — what skills fired, when, in what context, and how (user `/slash`, user-named, model-proactive, direct SKILL.md read, subagent). Use when the user asks to inspect a specific session ("what skills did session abc123 invoke and when"), audit a skill's usage ("is my-skill actually firing / when did it last run"), survey activity in a project/cwd, spot trends over time, or find installed-but-never-fired skills. Backed by the `skillscope` CLI over `~/.claude/projects/**/*.jsonl` (plus Codex, pi and opencode history via `--harness`); drive it non-interactively with `export --json | jq`. Local-only, no admin console or org API.
 ---
 
 # skillscope
@@ -18,7 +18,8 @@ skillscope normalizes every skill invocation into a flat record. One JSON object
 | Field | Meaning |
 |-------|---------|
 | `skill_name` | The skill invoked |
-| `trigger_type` | **How** it fired: `user-slash` (user typed `/skill`) or `claude-proactive` (model called the Skill tool itself) |
+| `trigger_type` | **How** it fired: `user-slash` (user typed `/skill`), `user-named` (model called the Skill tool after the user's latest prose named it as `/skill` or `$skill`), `claude-proactive` (model called the Skill tool unprompted), or `direct-read` (SKILL.md loaded with Read/Bash/`exec_command` instead of the Skill tool) |
+| `harness` | `claude`, `codex`, `pi` or `opencode` — which agent recorded it |
 | `origin` | `main` (main session transcript) or `subagent` (fired inside a spawned subagent) |
 | `session_id` | Full session UUID |
 | `timestamp` | ISO-8601 UTC — **when** it fired |
@@ -44,7 +45,9 @@ forms open an interactive TUI — **not** usable non-interactively. For agent-dr
 go through `export --json`, which streams every invocation as JSON lines, then slice with `jq`.
 
 Global filters that apply to every command: `--since <YYYY-MM-DD | 7d | 30d>`, `--origin main|subagent`,
-`--projects-dir <dir>` (point at a non-default transcript root).
+`--projects-dir <dir>` (point at a non-default transcript root), `--harness claude|codex|pi|opencode|all`
+(default `claude`; Codex/pi records are all `direct-read`, opencode `skill`-tool calls are
+`claude-proactive`; `report`, `fidelity` and the session TUIs stay Claude-only).
 
 ### "What skills did session `abc12345` invoke, when, and how?"
 
@@ -60,8 +63,8 @@ skillscope export --json \
 ```
 
 Present it as a chronological timeline: timestamp → skill → trigger type, with `args` as the
-context for why it fired. Call out the `user-slash` vs `claude-proactive` split explicitly — that's
-the "how" the user asked for. If the prefix matches more than one `session_id`, stop and report the
+context for why it fired. Call out the trigger split explicitly — that's the "how" the user asked
+for. If the prefix matches more than one `session_id`, stop and report the
 candidates (don't silently pick one).
 
 ### "How often did each trigger type fire in that session?"
@@ -98,7 +101,8 @@ skillscope projects --json               # per-project rollup across everything
 ### "Overall counts / trends"
 
 ```bash
-skillscope summary --json                # per-skill totals + user_slash/claude_proactive/subagent split
+skillscope summary --json                # per-skill totals + user_slash/user_named/claude_proactive/direct_read/subagent split
+skillscope summary --harness all --json  # same, across Claude Code, Codex, pi and opencode
 skillscope timeline --json               # daily series; add --week for weekly; add a [skill] to scope
 skillscope timeline <skill> --since 30d --json
 ```
@@ -124,8 +128,10 @@ command themselves.
 ## Answering well
 
 - **Lead with the answer**, then the evidence. The user asked a question; the table is support.
-- **Always distinguish trigger types** — `user-slash` vs `claude-proactive` (vs `subagent` origin)
-  is usually the point of the question, not an afterthought.
+- **Always distinguish trigger types** — `user-slash` / `user-named` (user-directed) vs
+  `claude-proactive` (genuine description trigger) vs `direct-read` (file loaded around the Skill
+  tool), plus `subagent` origin, is usually the point of the question, not an afterthought. Only
+  `claude-proactive` is evidence the description itself triggers the skill.
 - **Use `args` as context.** When explaining *why* a skill fired, the args/prompt is the strongest
   signal; quote or summarize it.
 - **Timestamps are UTC.** Say so if local time matters to the user.

@@ -3,15 +3,16 @@
 //!
 //! Answers the "is my skill readily being called?" question: which skills
 //! fired per session, how many times, and in what context — user `/slash`
-//! (typed command), claude-proactive (model-invoked via the Skill tool,
-//! i.e. keyword/description trigger), and main-vs-subagent origin. Those
-//! are the only trigger classes the transcripts record; hooks inject
-//! reminders, not skill invocations, so they have no row here.
+//! (typed command), user-named (Skill tool call the user asked for by
+//! `/name` or `$name`), claude-proactive (Skill tool call nobody asked for,
+//! i.e. keyword/description trigger), direct-read (SKILL.md loaded with
+//! Read/Bash), and main-vs-subagent origin. Hooks inject reminders, not
+//! skill invocations, so they have no row here.
 //!
 //! Zero-invocation sessions are counted deliberately: without them there
 //! is no denominator for "invoked in N of M sessions".
 
-use crate::models::{Origin, SkillInvocation, TriggerType};
+use crate::models::{Origin, SkillInvocation, TriggerCounts};
 use crate::parser;
 use crate::sessions::SessionIndex;
 use crate::sessionscan::{self, SessionSummary};
@@ -24,8 +25,8 @@ use std::path::Path;
 pub struct SkillUsage {
     pub skill_name: String,
     pub total: usize,
-    pub user_slash: usize,
-    pub claude_proactive: usize,
+    #[serde(flatten)]
+    pub triggers: TriggerCounts,
     pub subagent: usize,
     /// Distinct sessions that invoked this skill at least once.
     pub sessions: usize,
@@ -49,8 +50,8 @@ pub struct FocusRow {
     pub session_id: String,
     pub label: String,
     pub count: usize,
-    pub user_slash: usize,
-    pub claude_proactive: usize,
+    #[serde(flatten)]
+    pub triggers: TriggerCounts,
     pub subagent: usize,
     pub last_ts: DateTime<Utc>,
 }
@@ -104,8 +105,7 @@ pub fn build_report(
     // Per-skill aggregation across all selected sessions.
     struct Acc {
         total: usize,
-        user_slash: usize,
-        claude_proactive: usize,
+        triggers: TriggerCounts,
         subagent: usize,
         sessions: std::collections::BTreeSet<String>,
         first_seen: DateTime<Utc>,
@@ -118,18 +118,14 @@ pub fn build_report(
                 .entry(inv.skill_name.clone())
                 .or_insert_with(|| Acc {
                     total: 0,
-                    user_slash: 0,
-                    claude_proactive: 0,
+                    triggers: TriggerCounts::default(),
                     subagent: 0,
                     sessions: Default::default(),
                     first_seen: inv.timestamp,
                     last_seen: inv.timestamp,
                 });
             acc.total += 1;
-            match inv.trigger_type {
-                TriggerType::UserSlash => acc.user_slash += 1,
-                TriggerType::ClaudeProactive => acc.claude_proactive += 1,
-            }
+            acc.triggers.record(inv.trigger_type);
             if inv.origin == Origin::Subagent {
                 acc.subagent += 1;
             }
@@ -143,8 +139,7 @@ pub fn build_report(
         .map(|(skill_name, acc)| SkillUsage {
             skill_name,
             total: acc.total,
-            user_slash: acc.user_slash,
-            claude_proactive: acc.claude_proactive,
+            triggers: acc.triggers,
             subagent: acc.subagent,
             sessions: acc.sessions.len(),
             first_seen: acc.first_seen,
@@ -192,14 +187,10 @@ pub fn build_report(
                 session_id: summary.session_id.clone(),
                 label: summary.label.clone(),
                 count: hits.len(),
-                user_slash: hits
-                    .iter()
-                    .filter(|i| i.trigger_type == TriggerType::UserSlash)
-                    .count(),
-                claude_proactive: hits
-                    .iter()
-                    .filter(|i| i.trigger_type == TriggerType::ClaudeProactive)
-                    .count(),
+                triggers: hits.iter().fold(TriggerCounts::default(), |mut t, i| {
+                    t.record(i.trigger_type);
+                    t
+                }),
                 subagent: hits.iter().filter(|i| i.origin == Origin::Subagent).count(),
                 last_ts: hits.iter().map(|i| i.timestamp).max().unwrap(),
             });

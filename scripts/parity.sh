@@ -3,7 +3,10 @@
 # counts for MAIN-session transcripts must exactly match the Python
 # reference (experiments/python/src/skillscope). Subagent-origin rows are
 # additive on top of that — the Python reference has no concept of
-# subagent transcripts, so it can't be compared against them.
+# subagent transcripts, so it can't be compared against them. Likewise the
+# reference predates the user-named and direct-read trigger types: Rust
+# user-named rows fold back into claude-proactive (both are Skill tool
+# calls) and direct-read rows are dropped before comparing.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,7 +45,12 @@ def load_counts(path):
             if not line:
                 continue
             record = json.loads(line)
-            counts[(record["skill_name"], record["trigger_type"])] += 1
+            trigger = record["trigger_type"]
+            if trigger == "direct-read":
+                continue
+            if trigger == "user-named":
+                trigger = "claude-proactive"
+            counts[(record["skill_name"], trigger)] += 1
     return counts
 
 
