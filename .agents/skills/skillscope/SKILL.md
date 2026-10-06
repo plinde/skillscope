@@ -1,10 +1,14 @@
 ---
 name: skillscope
-version: 1.1.0
-description: Analyze Claude Code skill-invocation history from local transcripts on request — what skills fired, when, in what context, and how (user `/slash`, user-named, model-proactive, direct SKILL.md read, subagent). Use when the user asks to inspect a specific session ("what skills did session abc123 invoke and when"), audit a skill's usage ("is my-skill actually firing / when did it last run"), survey activity in a project/cwd, spot trends over time, or find installed-but-never-fired skills. Backed by the `skillscope` CLI over `~/.claude/projects/**/*.jsonl` (plus Codex, pi and opencode history via `--harness`); drive it non-interactively with `export --json | jq`. Local-only, no admin console or org API.
+version: 1.1.1
+description: "Analyze skill-invocation history from local Claude Code (plus Codex, pi, opencode) transcripts with the `skillscope` CLI: what fired, when, how. Use for \"what skills did session X invoke\", \"is my-skill firing\", project or time-window surveys, never-fired skills. Local-only, read-only."
 ---
 
 # skillscope
+
+## When to use
+
+Analyze Claude Code skill-invocation history from local transcripts on request — what skills fired, when, in what context, and how (user `/slash`, user-named, model-proactive, direct SKILL.md read, subagent). Use when the user asks to inspect a specific session ("what skills did session abc123 invoke and when"), audit a skill's usage ("is my-skill actually firing / when did it last run"), survey activity in a project/cwd, spot trends over time, or find installed-but-never-fired skills. Backed by the `skillscope` CLI over `~/.claude/projects/**/*.jsonl` (plus Codex, pi and opencode history via `--harness`); drive it non-interactively with `export --json | jq`. Local-only, no admin console or org API.
 
 Answer questions about how Claude Code skills are being invoked, from the local JSONL transcripts
 under `~/.claude/projects/`. The job is **analysis on request** — the user names a session, a skill,
