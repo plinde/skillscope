@@ -23,7 +23,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn jsonl_files_under(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn jsonl_files_under(dir: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = walkdir::WalkDir::new(dir)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -74,7 +74,7 @@ fn push_reads(
     }
 }
 
-fn file_stem(path: &Path) -> String {
+pub(crate) fn file_stem(path: &Path) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or_default()

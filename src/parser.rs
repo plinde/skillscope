@@ -297,7 +297,7 @@ pub(crate) fn glob_main_transcripts(projects_dir: &Path) -> Vec<PathBuf> {
 /// Discover subagent transcripts: `<projects_dir>/*/<session-uuid>/subagents/agent-*.jsonl`,
 /// recursing regardless of how deep the session-uuid directory sits (worktree
 /// project directory names can nest further than a single level).
-fn glob_subagent_transcripts(projects_dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn glob_subagent_transcripts(projects_dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for entry in walkdir::WalkDir::new(projects_dir)
         .into_iter()

@@ -49,6 +49,8 @@ smoke: build ## Smoke-test every subcommand against the live corpus
 	./target/release/$(BINARY) fidelity >/dev/null
 	./target/release/$(BINARY) report --cwd $(HOME) >/dev/null 2>&1 || true
 	./target/release/$(BINARY) inventory >/dev/null
+	./target/release/$(BINARY) lint >/dev/null
+	./target/release/$(BINARY) refs --since 7d >/dev/null
 	@./target/release/$(BINARY) 0000 2>/dev/null; test $$? -eq 1 || { echo "bad-target check failed"; exit 1; }
 	@echo "All subcommands OK"
 

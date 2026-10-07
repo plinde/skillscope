@@ -149,3 +149,50 @@ pub struct UserPrompt {
     #[allow(dead_code)]
     pub timestamp: DateTime<Utc>,
 }
+
+/// How much of a bundled skill file one tool call read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ReadExtent {
+    /// Whole file: a Read with no `limit`/`offset`, `cat`, `sed -n '1,$p'`.
+    Full,
+    /// Part of the file: Read `limit`/`offset`, `head`/`tail`, `sed -n 'a,bp'`,
+    /// `awk 'NR<=N'`. `lines` is None when the bound isn't known (an offset
+    /// with no limit).
+    Partial { lines: Option<u64> },
+    /// A search over the file (`grep`, `rg`, the Grep tool).
+    Search,
+    /// The file was named but the extent can't be told (pagers, scripts).
+    Unknown,
+}
+
+impl ReadExtent {
+    pub fn label(&self) -> String {
+        match self {
+            ReadExtent::Full => "full".to_string(),
+            ReadExtent::Partial { lines: Some(n) } => format!("partial({n})"),
+            ReadExtent::Partial { lines: None } => "partial".to_string(),
+            ReadExtent::Search => "search".to_string(),
+            ReadExtent::Unknown => "unknown".to_string(),
+        }
+    }
+}
+
+/// A tool call that touched a bundled file of a skill other than its
+/// SKILL.md (`skills/<name>/references/x.md`, `scripts/y.sh`, …). Kept apart
+/// from `SkillInvocation` so trigger counts are unaffected.
+#[derive(Debug, Clone, Serialize)]
+pub struct RefRead {
+    pub skill_name: String,
+    /// Path relative to the skill directory, e.g. `references/phases.md`.
+    pub rel_path: String,
+    pub extent: ReadExtent,
+    pub tool: String,
+    /// Model that issued the call, when the transcript records it.
+    pub model: Option<String>,
+    pub session_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub transcript_file: String,
+    pub origin: Origin,
+    pub harness: Harness,
+}

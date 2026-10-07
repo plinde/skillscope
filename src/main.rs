@@ -40,6 +40,17 @@ fn main() {
         Some(Command::Inventory { skill, skills_dirs }) => {
             skillscope::cli::cmd_inventory(&cli, skill.as_deref(), skills_dirs)
         }
+        Some(Command::Lint {
+            skill,
+            skills_dirs,
+            fail,
+        }) => skillscope::cli::cmd_lint(&cli, skill.as_deref(), skills_dirs, *fail),
+        Some(Command::Refs {
+            skill,
+            skills_dirs,
+            by_model,
+            reads,
+        }) => skillscope::cli::cmd_refs(&cli, skill.as_deref(), skills_dirs, *by_model, *reads),
     }
 }
 

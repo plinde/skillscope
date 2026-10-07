@@ -7,12 +7,17 @@
 use crate::aggregate::{self, Granularity};
 use crate::fidelity::run_fidelity;
 use crate::harness;
-use crate::models::{Harness, Origin, SkillInvocation, TriggerCounts, TriggerType};
+use crate::models::{
+    Harness, Origin, ReadExtent, RefRead, SkillInvocation, TriggerCounts, TriggerType,
+};
 use crate::parser::iter_invocations;
+use crate::refreads;
 use crate::sessions::{load_session_index, session_branch, session_label};
+use crate::skilltree::{self, Finding, Severity, SkillTree};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 fn home_dir() -> PathBuf {
@@ -127,6 +132,34 @@ pub enum Command {
         /// ~/.claude/skills, plus plugin marketplaces)
         #[arg(long = "skills-dir")]
         skills_dirs: Vec<PathBuf>,
+    },
+    /// Lint installed skills against the reference-file rules
+    /// (nested-ref, ref-over-100, orphan-file, body-over-500)
+    Lint {
+        /// Optional skill to lint (default: every installed skill)
+        skill: Option<String>,
+        /// Skill root to scan (repeatable; default as for `inventory`)
+        #[arg(long = "skills-dir")]
+        skills_dirs: Vec<PathBuf>,
+        /// Exit 1 when there is any finding
+        #[arg(long)]
+        fail: bool,
+    },
+    /// Per bundled file: depth, size, TOC, and how transcripts read it
+    /// (full, partial, search), by which model
+    Refs {
+        /// Optional skill to show (default: every skill with bundled files)
+        skill: Option<String>,
+        /// Skill root to scan (repeatable; default as for `inventory`)
+        #[arg(long = "skills-dir")]
+        skills_dirs: Vec<PathBuf>,
+        /// One row per (file, model) instead of per file
+        #[arg(long)]
+        by_model: bool,
+        /// Print the matched reads themselves as JSON lines (one per tool
+        /// call) instead of the table
+        #[arg(long)]
+        reads: bool,
     },
 }
 
@@ -751,6 +784,274 @@ pub fn cmd_export(cli: &Cli) {
             break;
         }
     }
+}
+
+/// Every bundled-file read the selected harnesses recorded, after
+/// `--since` / `--origin`. opencode has no file-read records.
+fn load_ref_reads(cli: &Cli) -> Vec<RefRead> {
+    let mut reads = Vec::new();
+    if cli.harness.includes(Harness::Claude) {
+        reads.extend(refreads::iter_claude_ref_reads(
+            &cli.resolved_projects_dir(),
+        ));
+    }
+    let home = home_dir();
+    if cli.harness.includes(Harness::Codex) {
+        reads.extend(refreads::iter_codex_ref_reads(
+            &home.join(".codex/sessions"),
+        ));
+    }
+    if cli.harness.includes(Harness::Pi) {
+        reads.extend(refreads::iter_pi_ref_reads(
+            &home.join(".pi/agent/sessions"),
+        ));
+    }
+    if let Some(since) = cli.resolved_since() {
+        reads.retain(|r| r.timestamp >= since);
+    }
+    if let Some(origin_filter) = cli.origin {
+        reads.retain(|r| match origin_filter {
+            OriginFilter::Main => r.origin == Origin::Main,
+            OriginFilter::Subagent => r.origin == Origin::Subagent,
+        });
+    }
+    reads
+}
+
+/// Installed skills (optionally one) walked into trees, with each skill's
+/// directory name (what transcript paths carry). Exits 1 when a named
+/// skill isn't installed.
+fn installed_trees(skill: Option<&str>, skills_dirs: &[PathBuf]) -> Vec<(String, SkillTree)> {
+    let dirs = (!skills_dirs.is_empty()).then_some(skills_dirs);
+    let installed = crate::inventory::inventory_skills(dirs);
+    let trees: Vec<(String, SkillTree)> = installed
+        .iter()
+        .filter(|s| skill.is_none_or(|k| s.name == k))
+        .filter_map(|s| {
+            let dir_name = s
+                .resolved_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&s.name)
+                .to_string();
+            skilltree::walk_skill(&s.name, &s.resolved_path).map(|t| (dir_name, t))
+        })
+        .collect();
+    if let Some(skill) = skill
+        && trees.is_empty()
+    {
+        eprintln!("Skill '{skill}' is not installed in the scanned skill roots.");
+        std::process::exit(1);
+    }
+    trees
+}
+
+pub fn cmd_lint(cli: &Cli, skill: Option<&str>, skills_dirs: &[PathBuf], fail: bool) {
+    let trees = installed_trees(skill, skills_dirs);
+    let findings: Vec<Finding> = trees.iter().flat_map(|(_, t)| skilltree::lint(t)).collect();
+
+    if cli.json {
+        print_json(&findings);
+    } else {
+        println!(
+            "Skill lint — {} skills, {} findings",
+            trees.len(),
+            findings.len()
+        );
+        if !findings.is_empty() {
+            println!(
+                "{:<30} {:<17} {:<6} {:<55} Source",
+                "Skill", "Rule", "Level", "Detail"
+            );
+        }
+        for f in &findings {
+            println!(
+                "{:<30} {:<17} {:<6} {:<55} {}",
+                f.skill,
+                f.code,
+                match f.severity {
+                    Severity::Error => "error",
+                    Severity::Warn => "warn",
+                },
+                f.detail,
+                f.source
+            );
+        }
+    }
+    if fail && !findings.is_empty() {
+        std::process::exit(1);
+    }
+}
+
+#[derive(Serialize, Default)]
+struct RefRow {
+    skill: String,
+    file: String,
+    /// Steps from SKILL.md; None = orphan.
+    depth: Option<usize>,
+    lines: usize,
+    has_toc: bool,
+    /// Present only with --by-model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    reads: usize,
+    full: usize,
+    partial: usize,
+    search: usize,
+    unknown: usize,
+    /// partial / (full + partial) as a percentage; None without content reads.
+    partial_pct: Option<f64>,
+    models: Vec<String>,
+    last_read: Option<DateTime<Utc>>,
+    /// The skill was used in the window but this file was never read.
+    never_read: bool,
+}
+
+fn ref_row(base: RefRow, reads: &[&RefRead]) -> RefRow {
+    let mut row = base;
+    let mut models = std::collections::BTreeSet::new();
+    for r in reads {
+        row.reads += 1;
+        match r.extent {
+            ReadExtent::Full => row.full += 1,
+            ReadExtent::Partial { .. } => row.partial += 1,
+            ReadExtent::Search => row.search += 1,
+            ReadExtent::Unknown => row.unknown += 1,
+        }
+        models.insert(r.model.clone().unwrap_or_else(|| "?".to_string()));
+        row.last_read = row.last_read.max(Some(r.timestamp));
+    }
+    let content = row.full + row.partial;
+    row.partial_pct = (content > 0).then(|| 100.0 * row.partial as f64 / content as f64);
+    row.models = models.into_iter().collect();
+    row
+}
+
+pub fn cmd_refs(
+    cli: &Cli,
+    skill: Option<&str>,
+    skills_dirs: &[PathBuf],
+    by_model: bool,
+    raw_reads: bool,
+) {
+    let trees = installed_trees(skill, skills_dirs);
+    let reads = load_ref_reads(cli);
+    let used: std::collections::HashSet<String> = load_invocations(cli)
+        .into_iter()
+        .map(|i| i.skill_name)
+        .collect();
+
+    let mut rows: Vec<RefRow> = Vec::new();
+    for (dir_name, tree) in &trees {
+        let skill_used = used.contains(&tree.skill) || used.contains(dir_name);
+        // files[0] is SKILL.md, whose reads are invocations.
+        for f in tree.files.iter().skip(1) {
+            let file_reads: Vec<&RefRead> = reads
+                .iter()
+                .filter(|r| {
+                    (r.skill_name == tree.skill || r.skill_name == *dir_name)
+                        && r.rel_path == f.rel_path
+                })
+                .collect();
+            if raw_reads {
+                for r in &file_reads {
+                    println!("{}", serde_json::to_string(r).unwrap());
+                }
+                continue;
+            }
+            let base = || RefRow {
+                skill: tree.skill.clone(),
+                file: f.rel_path.clone(),
+                depth: f.depth,
+                lines: f.lines,
+                has_toc: f.has_toc,
+                never_read: skill_used && file_reads.is_empty(),
+                ..Default::default()
+            };
+            if by_model && !file_reads.is_empty() {
+                let mut by: BTreeMap<String, Vec<&RefRead>> = BTreeMap::new();
+                for r in &file_reads {
+                    by.entry(r.model.clone().unwrap_or_else(|| "?".to_string()))
+                        .or_default()
+                        .push(r);
+                }
+                for (model, rs) in by {
+                    let row = RefRow {
+                        model: Some(model),
+                        ..base()
+                    };
+                    rows.push(ref_row(row, &rs));
+                }
+            } else {
+                rows.push(ref_row(base(), &file_reads));
+            }
+        }
+    }
+    if raw_reads {
+        return;
+    }
+
+    if cli.json {
+        print_json(&rows);
+        return;
+    }
+    let window = cli
+        .since
+        .as_deref()
+        .map(|s| format!(", window {s}"))
+        .unwrap_or_default();
+    println!(
+        "Bundled-file reads — {} rows, {} reads (harness {:?}{window})",
+        rows.len(),
+        rows.iter().map(|r| r.reads).sum::<usize>(),
+        cli.harness
+    );
+    println!(
+        "{:<22} {:<40} {:>5} {:>5} {:>3} {:>5} {:>4} {:>4} {:>4} {:>5} {:>5} {:>16}  {}",
+        "Skill",
+        "File",
+        "Depth",
+        "Lines",
+        "TOC",
+        "Reads",
+        "Full",
+        "Part",
+        "Srch",
+        "Other",
+        "Part%",
+        "Last read",
+        if by_model { "Model" } else { "Models" }
+    );
+    for r in &rows {
+        let flag = if r.never_read { " !" } else { "" };
+        println!(
+            "{:<22} {:<40} {:>5} {:>5} {:>3} {:>5} {:>4} {:>4} {:>4} {:>5} {:>5} {:>16}  {}",
+            r.skill,
+            format!("{}{flag}", r.file),
+            r.depth.map_or("orph".to_string(), |d| d.to_string()),
+            r.lines,
+            if r.has_toc { "y" } else { "-" },
+            r.reads,
+            r.full,
+            r.partial,
+            r.search,
+            r.unknown,
+            r.partial_pct.map_or("-".to_string(), |p| format!("{p:.0}")),
+            r.last_read.map_or("never".to_string(), |t| t
+                .format("%Y-%m-%d %H:%M")
+                .to_string()),
+            match &r.model {
+                Some(m) => m.clone(),
+                None => r.models.join(","),
+            },
+        );
+    }
+    println!();
+    println!(
+        "Depth: steps from SKILL.md (orph = unreachable). Part% = partial / (full + partial)."
+    );
+    println!("Other = extent unknown (script runs, pagers).");
+    println!("! = skill used in the window but this file never read.");
 }
 
 #[cfg(test)]
