@@ -63,7 +63,8 @@ asdf set rust latest          # writes .tool-versions in the repo
 ## Install / run
 
 ```bash
-make build && make install    # builds target/release/skillscope, installs to ~/bin
+brew install plinde/tap-private/skillscope   # release build (macOS arm64, Linux x86_64)
+make build                    # dev build: target/release/skillscope
 
 skillscope                    # TUI: skills -> sessions -> invocations drill-down
 skillscope .                  # fzf picker over sessions for the current cwd -> scoped TUI
@@ -82,6 +83,19 @@ skillscope refs <skill> --reads  # the matched tool calls as JSON lines
 skillscope export             # JSON export of normalized invocations
 
 skillscope summary --harness all   # include Codex, pi and opencode history (default: claude)
+```
+
+## Releases
+
+Pushing a `v*` tag that matches `Cargo.toml`'s version runs `.github/workflows/release.yml`:
+it builds `aarch64-apple-darwin` (ad-hoc codesigned) and `x86_64-unknown-linux-musl` (static,
+any glibc), publishes a GitHub Release, and pushes `Formula/skillscope.rb` to
+`plinde/homebrew-tap-private` (needs the `TAP_GITHUB_TOKEN` secret); `brew upgrade` picks it up.
+`workflow_dispatch` runs the builds only.
+
+```bash
+# bump version in Cargo.toml via PR, merge, then:
+git tag v0.2.0 origin/main && git push origin v0.2.0
 ```
 
 ## Data sources (JSONL schema, confirmed against live transcripts)

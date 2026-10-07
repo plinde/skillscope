@@ -36,10 +36,10 @@ The three axes the user usually asks about map to: **when** = `timestamp`, **wha
 
 ## Prerequisite: the binary
 
-Requires the `skillscope` CLI on `PATH`. Check, and build from the repo root if missing:
+Requires the `skillscope` CLI on `PATH`. Check, and install it from the private tap if missing:
 
 ```bash
-command -v skillscope || (cd "$(git rev-parse --show-toplevel)" && make build && make install)
+command -v skillscope || brew install plinde/tap-private/skillscope
 ```
 
 ## Primary workflow: `export --json | jq`
