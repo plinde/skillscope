@@ -1,6 +1,6 @@
 ---
 name: skillscope
-version: 1.1.1
+version: 1.2.0
 description: "Analyze skill-invocation history from local Claude Code (plus Codex, pi, opencode) transcripts with the `skillscope` CLI: what fired, when, how. Use for \"what skills did session X invoke\", \"is my-skill firing\", project or time-window surveys, never-fired skills. Local-only, read-only."
 ---
 
@@ -121,6 +121,29 @@ Flags skills that match a prompt's intent but never fired (under-triggering) and
 on unrelated prompts (over-triggering), TF-IDF-weighted against each skill's frontmatter
 `description`. Tunables (env): `SKILLSCOPE_TFIDF_THRESHOLD` (default 20.0),
 `SKILLSCOPE_MIN_SESSION_COUNT` (default 8).
+
+### "Is this skill's reference read in full, or only in part?"
+
+```bash
+skillscope refs <skill> --harness all --since 30d          # per bundled file
+skillscope refs <skill> --harness all --by-model --json    # split by model
+skillscope refs <skill> --reads | jq -c '{rel_path, extent, tool, model, session_id}'
+```
+
+Per file: depth below SKILL.md, lines, TOC, reads split into `full` / `partial` (`head -N`, Read
+`limit`, `sed -n 'a,bp'`) / `search` (`grep`/`rg`) / other (script runs). `!` marks a file of a
+skill used in the window that was never read. Check a surprising row with `--reads`.
+
+### "Lint my skills"
+
+```bash
+skillscope lint                      # every installed skill: manifest, vendored, plugin
+skillscope lint <skill> --fail       # exit 1 on any finding (for scripts and PR checks)
+```
+
+Rules: `nested-ref` (a reference links another reference), `ref-over-100` (split by domain;
+`ref-over-100-toc` if it has a contents list), `orphan-file` (nothing reachable from SKILL.md names
+it), `body-over-500`. Each finding names its docs anchor or "local policy".
 
 ## Interactive mode (hand back to the user)
 

@@ -37,6 +37,12 @@ grepping whole lines would count every skill in every session. Session-scoped mo
   transcripts (`--origin main|subagent`)
 - **Skill inventory** — join installed skills (`~/.agents/skills`, `~/.claude/skills`, plugin
   marketplaces) against invocation history to see what's installed but never fires
+- **Skill lint** — check installed skills (manifest, vendored, plugin) against the reference-file
+  rules from Claude's skill best practices: nested references, references over 100 lines,
+  bundled files nothing links to, SKILL.md bodies over 500 lines (`--fail` for scripts)
+- **Reference reads** — per bundled file (`references/*.md`, `scripts/*`): how deep it sits below
+  SKILL.md, its size and TOC, and whether transcripts read it in full, in part (`head -100`,
+  Read `limit`) or only searched it, by which model; files of a used skill that are never read
 
 ## Prerequisites
 
@@ -70,6 +76,9 @@ skillscope projects           # per-project breakdown
 skillscope fidelity           # trigger-fidelity report
 skillscope report [skill]     # per-cwd session survey with trigger context
 skillscope inventory [skill]  # installed-skill inventory joined against invocation history
+skillscope lint [skill]       # reference-file rules for installed skills (--fail: exit 1 on findings)
+skillscope refs [skill]       # per bundled file: depth, lines, TOC, full/partial/search reads (--by-model)
+skillscope refs <skill> --reads  # the matched tool calls as JSON lines
 skillscope export             # JSON export of normalized invocations
 
 skillscope summary --harness all   # include Codex, pi and opencode history (default: claude)
@@ -98,12 +107,40 @@ skillscope summary --harness all   # include Codex, pi and opencode history (def
    delegations (`Agent`, `Task`, `SendMessage`) are not reads.
 4. **Subagent transcripts** — `<project>/<session-uuid>/subagents/agent-*.jsonl`, same schema,
    tagged with `origin: subagent`.
-5. **`sessions-index.json`** — Claude Code's own per-project session index
+5. **Reference reads** (`skillscope refs`, a separate pass: invocation counts don't change) — any
+   tool call naming `skills/<name>/<relpath>` with relpath not `SKILL.md`, in Claude, Codex and pi
+   transcripts. The extent comes from the tool's own fields:
+   - **full** — Read with no `limit`/`offset`; `cat`, `nl`; `sed -n '1,$p'`.
+   - **partial** — Read `limit` (or `offset`); `head`/`tail` (`-N`, `-n N`; default 10);
+     `sed -n 'a,bp'`; `awk 'NR<=N'`. A `cat`/`nl` piped into one of these takes its bound.
+   - **search** — `grep`/`rg`, the Grep tool.
+   - **unknown** — anything else naming the file (running a script, `less`/`more`).
+
+   Shell commands are split at `|`, `&&`, `;` and only the segment naming the file decides.
+   Commands that don't read text (`ls`, `wc`, `git`, `sed -i`) and tools that only quote paths
+   (plans, todos) are skipped. The model is the assistant `message.model` (Claude, pi) or the
+   Codex `turn_context.model`. One record per file per message.
+6. **`sessions-index.json`** — Claude Code's own per-project session index
    (`firstPrompt`/`summary`/`gitBranch`/`modified`/`projectPath`), joined for friendlier session
    labels and recency sorting.
 
 Each transcript line also carries `sessionId`, `cwd`, `timestamp` (ISO 8601). Every exported
 record carries `harness` (`claude`, `codex`, `pi`, `opencode`).
+
+## Lint rules
+
+From Claude's [skill authoring best practices](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices):
+Claude may preview nested reference files with `head -100` and so read them only in part.
+
+| Rule | Level | Fires when | Source |
+|---|---|---|---|
+| `nested-ref` | error | a reference `.md` links another reference `.md` (markdown link or backticked name, outside code fences) | `#avoid-deeply-nested-references` |
+| `ref-over-100` | error | a reference `.md` is over 100 lines with no table of contents: split it by domain | local policy, `#pattern-2-domain-specific-organization` |
+| `ref-over-100-toc` | warn | as above, but a `## Contents` heading sits in its first 30 lines | `#structure-longer-reference-files-with-table-of-contents` |
+| `orphan-file` | warn | a bundled file nothing reachable from SKILL.md names (path, link, or a parent directory) | `#observe-how-claude-navigates-skills` |
+| `body-over-500` | error | SKILL.md body (after frontmatter) is over 500 lines | `#token-budgets` |
+
+`evals/`, `agents/openai.yaml` (Codex metadata), `LICENSE*` and dot-dirs are not bundled content.
 
 ## Data retention (read this before trusting long-range trends)
 
@@ -137,7 +174,7 @@ sessions."
 
 ```
 src/
-├── models.rs        # SkillInvocation, Origin, TriggerType, Harness
+├── models.rs        # SkillInvocation, RefRead, ReadExtent, Origin, TriggerType, Harness
 ├── parser.rs        # JSONL streaming extraction (main + subagent + scoped)
 ├── harness.rs       # Codex, pi and opencode session stores
 ├── aggregate.rs      # counts, trigger breakdown, time-series, per-project rollups
@@ -148,6 +185,8 @@ src/
 ├── fidelity.rs            # skill discovery + TF-IDF trigger-fidelity heuristics
 ├── report.rs               # per-cwd session survey
 ├── inventory.rs             # installed-skill inventory join
+├── skilltree.rs             # skill dir walk: bundled files, links, depth, lint rules
+├── refreads.rs              # bundled-file reads + extent (full/partial/search) per tool call
 ├── cli.rs                    # clap subcommands + global flags
 └── tui/                       # ratatui: global + session-scoped drill-down views
 ```
