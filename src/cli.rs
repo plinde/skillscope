@@ -61,6 +61,7 @@ impl HarnessFilter {
 #[derive(Parser, Debug)]
 #[command(
     name = "skillscope",
+    version,
     about = "Claude Code skill-invocation analytics (local JSONL transcripts only).",
     disable_help_subcommand = true
 )]
@@ -90,7 +91,7 @@ pub struct Cli {
 
     /// Session scope: `.` picks a session for the current directory via
     /// fzf; a full UUID or >=8-char hex prefix opens that session directly.
-    #[arg(value_name = "TARGET", conflicts_with = "command")]
+    #[arg(value_name = "TARGET")]
     pub target: Option<String>,
 
     #[command(subcommand)]
@@ -1057,6 +1058,13 @@ pub fn cmd_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clap_definition_is_valid() {
+        // Release builds skip clap's debug asserts; run them here.
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
 
     fn cli_with_since(since: Option<&str>) -> Cli {
         Cli {

@@ -6,6 +6,10 @@ use std::path::Path;
 
 fn main() {
     let cli = Cli::parse();
+    if cli.target.is_some() && cli.command.is_some() {
+        eprintln!("skillscope: a session TARGET and a subcommand can't be combined");
+        std::process::exit(2);
+    }
 
     if let Some(target) = &cli.target {
         let projects_dir = cli.resolved_projects_dir();
