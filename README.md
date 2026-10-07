@@ -91,7 +91,7 @@ Pushing a `v*` tag that matches `Cargo.toml`'s version runs `.github/workflows/r
 it builds `aarch64-apple-darwin` (ad-hoc codesigned) and `x86_64-unknown-linux-musl` (static,
 any glibc), publishes a GitHub Release, and pushes `Formula/skillscope.rb` to
 `plinde/homebrew-tap-private` (needs the `TAP_GITHUB_TOKEN` secret); `brew upgrade` picks it up.
-`workflow_dispatch` runs the builds only.
+PRs that touch the build inputs, and `workflow_dispatch`, run the builds only.
 
 ```bash
 # bump version in Cargo.toml via PR, merge, then:

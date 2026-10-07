@@ -18,7 +18,15 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  # Manual run = build + smoke only (no release, no tap push), to test a branch.
+  # PRs touching the build inputs, and manual runs, build + smoke only (no release, no tap
+  # push), so a broken target shows up before the tag.
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/release.yml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
   workflow_dispatch:
 
 permissions:
