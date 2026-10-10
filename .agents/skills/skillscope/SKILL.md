@@ -1,14 +1,14 @@
 ---
 name: skillscope
-version: 1.2.0
-description: "Analyze skill-invocation history from local Claude Code (plus Codex, pi, opencode) transcripts with the `skillscope` CLI: what fired, when, how. Use for \"what skills did session X invoke\", \"is my-skill firing\", project or time-window surveys, never-fired skills. Local-only, read-only."
+version: 1.3.0
+description: "Analyze skill-invocation history from local Claude Code (+ Codex, pi, opencode) transcripts with the `skillscope` CLI: what fired, when, how. Use for \"what skills did session X invoke\", \"is my-skill firing\", project/time surveys, linting skills, whether references get read in full. Read-only."
 ---
 
 # skillscope
 
 ## When to use
 
-Analyze Claude Code skill-invocation history from local transcripts on request — what skills fired, when, in what context, and how (user `/slash`, user-named, model-proactive, direct SKILL.md read, subagent). Use when the user asks to inspect a specific session ("what skills did session abc123 invoke and when"), audit a skill's usage ("is my-skill actually firing / when did it last run"), survey activity in a project/cwd, spot trends over time, or find installed-but-never-fired skills. Backed by the `skillscope` CLI over `~/.claude/projects/**/*.jsonl` (plus Codex, pi and opencode history via `--harness`); drive it non-interactively with `export --json | jq`. Local-only, no admin console or org API.
+Analyze Claude Code skill-invocation history from local transcripts on request — what skills fired, when, in what context, and how (user `/slash`, user-named, model-proactive, direct SKILL.md read, subagent). Use when the user asks to inspect a specific session ("what skills did session abc123 invoke and when"), audit a skill's usage ("is my-skill actually firing / when did it last run"), survey activity in a project/cwd, spot trends over time, or find installed-but-never-fired skills. Also lint installed skills against the reference-file rules (`skillscope lint`: nested refs, refs over 100 lines, orphan files, long bodies) and show whether each bundled reference is read in full, in part or only searched, by model (`skillscope refs`). Backed by the `skillscope` CLI over `~/.claude/projects/**/*.jsonl` (plus Codex, pi and opencode history via `--harness`); drive it non-interactively with `export --json | jq`. Local-only, no admin console or org API.
 
 Answer questions about how Claude Code skills are being invoked, from the local JSONL transcripts
 under `~/.claude/projects/`. The job is **analysis on request** — the user names a session, a skill,
@@ -45,8 +45,9 @@ command -v skillscope || brew install plinde/tap-private/skillscope
 ## Primary workflow: `export --json | jq`
 
 The subcommands' default output is human tables, and the bare `skillscope` / `skillscope <TARGET>`
-forms open an interactive TUI — **not** usable non-interactively. For agent-driven analysis, always
-go through `export --json`, which streams every invocation as JSON lines, then slice with `jq`.
+forms open an interactive TUI — **not** usable non-interactively. For invocation analysis, go
+through `export --json`, which streams every invocation as JSON lines, then slice with `jq`. `lint`
+and `refs` take `--json` themselves (recipes below).
 
 Global filters that apply to every command: `--since <YYYY-MM-DD | 7d | 30d>`, `--origin main|subagent`,
 `--projects-dir <dir>` (point at a non-default transcript root), `--harness claude|codex|pi|opencode|all`

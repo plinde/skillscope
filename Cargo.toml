@@ -1,6 +1,6 @@
 [package]
 name = "skillscope"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Claude Code skill-invocation analytics — local JSONL transcripts only"
 license = "MIT"
