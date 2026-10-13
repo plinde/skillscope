@@ -2,7 +2,6 @@
 //! invocations list. Follows the ratatui skill's panel/table-widget pattern.
 
 use super::app::{App, Level};
-use crate::models::TriggerType;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -60,8 +59,10 @@ fn draw_skills(f: &mut Frame, app: &App, area: Rect) {
             Row::new(vec![
                 Cell::from(r.name.clone()),
                 Cell::from(r.stats.total.to_string()),
-                Cell::from(r.stats.user_slash.to_string()),
-                Cell::from(r.stats.claude_proactive.to_string()),
+                Cell::from(r.stats.triggers.user_slash.to_string()),
+                Cell::from(r.stats.triggers.user_named.to_string()),
+                Cell::from(r.stats.triggers.claude_proactive.to_string()),
+                Cell::from(r.stats.triggers.direct_read.to_string()),
                 Cell::from(r.stats.subagent.to_string()),
                 Cell::from(r.stats.last_seen.date_naive().to_string()),
             ])
@@ -69,12 +70,14 @@ fn draw_skills(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let widths = [
-        Constraint::Percentage(34),
-        Constraint::Percentage(12),
-        Constraint::Percentage(12),
+        Constraint::Percentage(30),
+        Constraint::Percentage(9),
+        Constraint::Percentage(9),
+        Constraint::Percentage(9),
+        Constraint::Percentage(11),
+        Constraint::Percentage(9),
+        Constraint::Percentage(9),
         Constraint::Percentage(14),
-        Constraint::Percentage(12),
-        Constraint::Percentage(16),
     ];
 
     let table = Table::new(table_rows, widths)
@@ -82,7 +85,9 @@ fn draw_skills(f: &mut Frame, app: &App, area: Rect) {
             "Skill",
             "Total",
             "Slash",
+            "Named",
             "Proactive",
+            "Read",
             "Subagent",
             "Last seen",
         ]))
@@ -159,10 +164,7 @@ fn draw_invocations(f: &mut Frame, app: &App, area: Rect) {
     let table_rows: Vec<Row> = rows
         .iter()
         .map(|inv| {
-            let trigger = match inv.trigger_type {
-                TriggerType::UserSlash => "user-slash",
-                TriggerType::ClaudeProactive => "claude-proactive",
-            };
+            let trigger = inv.trigger_type.label();
             Row::new(vec![
                 Cell::from(inv.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()),
                 Cell::from(trigger),
@@ -218,8 +220,10 @@ fn draw_session_skills(f: &mut Frame, app: &App, area: Rect) {
             Row::new(vec![
                 Cell::from(r.name.clone()),
                 Cell::from(r.stats.total.to_string()),
-                Cell::from(r.stats.user_slash.to_string()),
-                Cell::from(r.stats.claude_proactive.to_string()),
+                Cell::from(r.stats.triggers.user_slash.to_string()),
+                Cell::from(r.stats.triggers.user_named.to_string()),
+                Cell::from(r.stats.triggers.claude_proactive.to_string()),
+                Cell::from(r.stats.triggers.direct_read.to_string()),
                 Cell::from(r.stats.subagent.to_string()),
                 Cell::from(r.stats.last_seen.format("%Y-%m-%d %H:%M").to_string()),
             ])
@@ -227,12 +231,14 @@ fn draw_session_skills(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let widths = [
-        Constraint::Percentage(34),
-        Constraint::Percentage(12),
-        Constraint::Percentage(12),
+        Constraint::Percentage(30),
+        Constraint::Percentage(9),
+        Constraint::Percentage(9),
+        Constraint::Percentage(9),
+        Constraint::Percentage(11),
+        Constraint::Percentage(9),
+        Constraint::Percentage(9),
         Constraint::Percentage(14),
-        Constraint::Percentage(12),
-        Constraint::Percentage(16),
     ];
 
     let table = Table::new(table_rows, widths)
@@ -240,7 +246,9 @@ fn draw_session_skills(f: &mut Frame, app: &App, area: Rect) {
             "Skill",
             "Total",
             "Slash",
+            "Named",
             "Proactive",
+            "Read",
             "Subagent",
             "Last seen",
         ]))
@@ -269,10 +277,7 @@ fn draw_session_timeline(f: &mut Frame, app: &App, area: Rect) {
     let table_rows: Vec<Row> = rows
         .iter()
         .map(|inv| {
-            let trigger = match inv.trigger_type {
-                TriggerType::UserSlash => "user-slash",
-                TriggerType::ClaudeProactive => "claude-proactive",
-            };
+            let trigger = inv.trigger_type.label();
             Row::new(vec![
                 Cell::from(inv.timestamp.format("%Y-%m-%d %H:%M:%S").to_string()),
                 Cell::from(inv.skill_name.clone()),

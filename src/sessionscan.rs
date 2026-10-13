@@ -134,7 +134,7 @@ pub fn discover_sessions_for_cwd(
         }
     }
 
-    out.sort_by(|a, b| b.last_turn.cmp(&a.last_turn));
+    out.sort_by_key(|a| std::cmp::Reverse(a.last_turn));
     out
 }
 

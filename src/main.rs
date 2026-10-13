@@ -6,6 +6,10 @@ use std::path::Path;
 
 fn main() {
     let cli = Cli::parse();
+    if cli.target.is_some() && cli.command.is_some() {
+        eprintln!("skillscope: a session TARGET and a subcommand can't be combined");
+        std::process::exit(2);
+    }
 
     if let Some(target) = &cli.target {
         let projects_dir = cli.resolved_projects_dir();
@@ -19,7 +23,7 @@ fn main() {
 
     match &cli.command {
         None => {
-            let invs = parser::iter_invocations(&cli.resolved_projects_dir());
+            let invs = skillscope::cli::harness_invocations(&cli);
             let index = sessions::load_session_index(&cli.resolved_projects_dir());
             if let Err(e) = tui::run(invs, index) {
                 eprintln!("TUI error: {e}");
@@ -40,6 +44,17 @@ fn main() {
         Some(Command::Inventory { skill, skills_dirs }) => {
             skillscope::cli::cmd_inventory(&cli, skill.as_deref(), skills_dirs)
         }
+        Some(Command::Lint {
+            skill,
+            skills_dirs,
+            fail,
+        }) => skillscope::cli::cmd_lint(&cli, skill.as_deref(), skills_dirs, *fail),
+        Some(Command::Refs {
+            skill,
+            skills_dirs,
+            by_model,
+            reads,
+        }) => skillscope::cli::cmd_refs(&cli, skill.as_deref(), skills_dirs, *by_model, *reads),
     }
 }
 

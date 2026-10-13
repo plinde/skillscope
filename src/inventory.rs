@@ -13,7 +13,7 @@
 //! whether any resolution happened.
 
 use crate::fidelity::{self, iter_skill_md_candidates};
-use crate::models::{Origin, SkillInvocation, TriggerType};
+use crate::models::{Harness, Origin, SkillInvocation, TriggerCounts, TriggerType};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -95,6 +95,7 @@ pub struct LastInvocation {
     pub project_path: String,
     pub trigger_type: TriggerType,
     pub origin: Origin,
+    pub harness: Harness,
     pub args: Option<String>,
 }
 
@@ -103,8 +104,8 @@ pub struct InventoryRow {
     #[serde(flatten)]
     pub skill: InstalledSkill,
     pub total_invocations: usize,
-    pub user_slash: usize,
-    pub claude_proactive: usize,
+    #[serde(flatten)]
+    pub triggers: TriggerCounts,
     pub subagent: usize,
     pub last: Option<LastInvocation>,
 }
@@ -116,8 +117,7 @@ pub fn join_inventory(skills: Vec<InstalledSkill>, invs: &[SkillInvocation]) -> 
     // skill name -> (counts, most recent invocation)
     struct Acc<'a> {
         total: usize,
-        user_slash: usize,
-        claude_proactive: usize,
+        triggers: TriggerCounts,
         subagent: usize,
         last: &'a SkillInvocation,
     }
@@ -125,16 +125,12 @@ pub fn join_inventory(skills: Vec<InstalledSkill>, invs: &[SkillInvocation]) -> 
     for inv in invs {
         let acc = by_name.entry(inv.skill_name.as_str()).or_insert(Acc {
             total: 0,
-            user_slash: 0,
-            claude_proactive: 0,
+            triggers: TriggerCounts::default(),
             subagent: 0,
             last: inv,
         });
         acc.total += 1;
-        match inv.trigger_type {
-            TriggerType::UserSlash => acc.user_slash += 1,
-            TriggerType::ClaudeProactive => acc.claude_proactive += 1,
-        }
+        acc.triggers.record(inv.trigger_type);
         if inv.origin == Origin::Subagent {
             acc.subagent += 1;
         }
@@ -149,8 +145,7 @@ pub fn join_inventory(skills: Vec<InstalledSkill>, invs: &[SkillInvocation]) -> 
             let acc = by_name.get(skill.name.as_str());
             InventoryRow {
                 total_invocations: acc.map_or(0, |a| a.total),
-                user_slash: acc.map_or(0, |a| a.user_slash),
-                claude_proactive: acc.map_or(0, |a| a.claude_proactive),
+                triggers: acc.map_or_else(TriggerCounts::default, |a| a.triggers),
                 subagent: acc.map_or(0, |a| a.subagent),
                 last: acc.map(|a| LastInvocation {
                     timestamp: a.last.timestamp,
@@ -158,6 +153,7 @@ pub fn join_inventory(skills: Vec<InstalledSkill>, invs: &[SkillInvocation]) -> 
                     project_path: a.last.project_path.clone(),
                     trigger_type: a.last.trigger_type,
                     origin: a.last.origin,
+                    harness: a.last.harness,
                     args: a.last.args.clone(),
                 }),
                 skill,
@@ -204,6 +200,7 @@ mod tests {
             transcript_file: "/tmp/t.jsonl".to_string(),
             args: None,
             origin,
+            harness: Harness::Claude,
         }
     }
 
@@ -263,8 +260,8 @@ mod tests {
         // Invoked skills sort before never-invoked ones.
         assert_eq!(rows[0].skill.name, "alpha");
         assert_eq!(rows[0].total_invocations, 3);
-        assert_eq!(rows[0].user_slash, 2);
-        assert_eq!(rows[0].claude_proactive, 1);
+        assert_eq!(rows[0].triggers.user_slash, 2);
+        assert_eq!(rows[0].triggers.claude_proactive, 1);
         assert_eq!(rows[0].subagent, 1);
         let last = rows[0].last.as_ref().unwrap();
         assert_eq!(last.session_id, "sess-3");

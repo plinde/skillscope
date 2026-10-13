@@ -56,8 +56,8 @@ fn per_skill_usage_aggregates_trigger_context_and_session_reach() {
         .find(|s| s.skill_name == "worktree")
         .unwrap();
     assert_eq!(worktree.total, 1);
-    assert_eq!(worktree.user_slash, 1);
-    assert_eq!(worktree.claude_proactive, 0);
+    assert_eq!(worktree.triggers.user_slash, 1);
+    assert_eq!(worktree.triggers.claude_proactive, 0);
     assert_eq!(worktree.sessions, 1);
 
     let github_cli = report
@@ -66,7 +66,7 @@ fn per_skill_usage_aggregates_trigger_context_and_session_reach() {
         .find(|s| s.skill_name == "github-cli")
         .unwrap();
     assert_eq!(github_cli.subagent, 1);
-    assert_eq!(github_cli.claude_proactive, 1);
+    assert_eq!(github_cli.triggers.claude_proactive, 1);
 }
 
 #[test]
@@ -83,8 +83,8 @@ fn focus_reports_invoked_in_n_of_m_sessions_with_trigger_breakdown() {
     let row = &focus.rows[0];
     assert_eq!(row.session_id, SESSION_ONE);
     assert_eq!(row.count, 1);
-    assert_eq!(row.user_slash, 0);
-    assert_eq!(row.claude_proactive, 1);
+    assert_eq!(row.triggers.user_slash, 0);
+    assert_eq!(row.triggers.claude_proactive, 1);
 }
 
 #[test]
