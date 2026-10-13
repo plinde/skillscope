@@ -87,16 +87,15 @@ skillscope summary --harness all   # include Codex, pi and opencode history (def
 
 ## Releases
 
-Pushing a `v*` tag that matches `Cargo.toml`'s version runs `.github/workflows/release.yml`:
-it builds `aarch64-apple-darwin` (ad-hoc codesigned) and `x86_64-unknown-linux-musl` (static,
+Every merge to `main` releases. `.github/workflows/release.yml` picks the next version (minor
+bump if any `feat` commit since the last `v*` tag, else patch; docs-only merges skip; a PR that
+already bumped `Cargo.toml` past the last tag sets the version), commits the `Cargo.toml` /
+`Cargo.lock` bump to `main` as `chore(release): vX.Y.Z`, tags it, then builds `aarch64-apple-darwin` (ad-hoc codesigned) and `x86_64-unknown-linux-musl` (static,
 any glibc), publishes a GitHub Release, and pushes `Formula/skillscope.rb` to
 `plinde/homebrew-tap-private` (needs the `TAP_GITHUB_TOKEN` secret); `brew upgrade` picks it up.
-PRs that touch the build inputs, and `workflow_dispatch`, run the builds only.
-
-```bash
-# bump version in Cargo.toml via PR, merge, then:
-git tag v0.2.0 origin/main && git push origin v0.2.0
-```
+PRs that touch the build inputs run the builds only. `workflow_dispatch` releases if `main` has
+unreleased changes, else builds only. A manual `v*` tag that matches `Cargo.toml` still releases
+exactly that tag.
 
 ## Data sources (JSONL schema, confirmed against live transcripts)
 
