@@ -1,7 +1,8 @@
 name: CI
 
-# Gates every PR. `auto-merge.yml` keys off this workflow's name — rename it
-# there too if you rename it here, or auto-merge silently stops firing.
+# Gates every PR; its last step auto-merges a green PR (automerge v2).
+# release.yml keys off this workflow's name (workflow_run: ["CI"]) — rename it
+# there too if you rename it here, or release-on-merge silently stops firing.
 #
 # No third-party actions. GitHub's ubuntu runners ship rustup, and rustup reads
 # rust-toolchain.toml, so `rustup show` installs and selects the pinned version
