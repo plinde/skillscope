@@ -1,27 +1,30 @@
 # skillscope
 
-Claude Code skill-invocation analytics. Local-only: parses `~/.claude/projects/**/*.jsonl` transcripts directly — no Enterprise admin console, no org API, no OTLP sink required. Works for any individual Claude Code install.
+Claude Code skill-invocation analytics. Local-only: parses `~/.claude/projects/**/*.jsonl` transcripts directly (plus Codex, pi and opencode history with `--harness`) — no Enterprise admin console, no org API, no OTLP sink required. Works for any individual Claude Code install.
 
 Rust is the primary, shipped implementation (this directory), promoted after a bake-off against Go and Python POCs (see `experiments/`).
 
 ## Agent support
 
-Claude Code only, currently. skillscope parses `~/.claude/projects/**/*.jsonl` — Claude Code's
-specific transcript format (`sessionId`/`cwd`/`timestamp` per line, `<command-name>` tags for
-slash invocations, `Skill` tool_use blocks for proactive ones, `sessions-index.json` per
-project).
+Claude Code by default. `--harness` selects whose history to read:
 
-Codex (`~/.codex/sessions/`) and OpenCode (`~/.local/share/opencode/`) both log equivalent
-per-session JSONL/JSON transcripts with a comparable shape (turn-by-turn messages, tool calls,
-timestamps, cwd). Adding either as a second `Origin`/data source is expected to be a parser +
-model addition, not a rearchitecture: implement a `parser::<agent>` module producing the same
-`SkillInvocation` (or agent-equivalent "tool/command invocation") struct the aggregation,
-fidelity, and TUI layers already consume, and gate it behind a `--agent claude|codex|opencode`
-flag or auto-detection by which directory exists. No PRs open for this yet.
+| `--harness` | Source | What counts as a skill use |
+|---|---|---|
+| `claude` (default) | `~/.claude/projects/**/*.jsonl` | every trigger type below |
+| `codex` | `~/.codex/sessions/**/*.jsonl` rollouts | `direct-read`: a `function_call` / `custom_tool_call` whose arguments reference `skills/<name>/SKILL.md` |
+| `pi` | `~/.pi/agent/sessions/*/*.jsonl` | `direct-read`: an assistant `toolCall` whose arguments reference a SKILL.md |
+| `opencode` | `~/.local/share/opencode/opencode.db` | `claude-proactive`: a call to opencode's native `skill` tool (read via the `sqlite3` CLI) |
+| `all` | every store that exists | — |
+
+Codex and pi have no Skill tool — an agent uses a skill by reading its file — so only tool-call
+inputs are matched. Codex's model-visible skill catalog lists every installed SKILL.md path, so
+grepping whole lines would count every skill in every session. Session-scoped modes (`skillscope .`,
+`skillscope <session-id>`), `report` and `fidelity` stay Claude Code-only.
 
 ## What it does
 
-- **Per-skill usage counts** with trigger-type breakdown (user `/slash` vs model-proactive `Skill` tool_use)
+- **Per-skill usage counts** with trigger-type breakdown: user `/slash`, user-named (Skill tool
+  call the user asked for by name), model-proactive `Skill` tool_use, and direct SKILL.md reads
 - **Session-level drill-down** — which sessions fired a skill, in which project/cwd
 - **Session-scoped modes** — `skillscope .` (fzf picker over sessions for the current cwd) and
   `skillscope <session-id>` (full UUID or `>=8`-char hex prefix) open a TUI scoped to one session,
@@ -34,6 +37,12 @@ flag or auto-detection by which directory exists. No PRs open for this yet.
   transcripts (`--origin main|subagent`)
 - **Skill inventory** — join installed skills (`~/.agents/skills`, `~/.claude/skills`, plugin
   marketplaces) against invocation history to see what's installed but never fires
+- **Skill lint** — check installed skills (manifest, vendored, plugin) against the reference-file
+  rules from Claude's skill best practices: nested references, references over 100 lines,
+  bundled files nothing links to, SKILL.md bodies over 500 lines (`--fail` for scripts)
+- **Reference reads** — per bundled file (`references/*.md`, `scripts/*`): how deep it sits below
+  SKILL.md, its size and TOC, and whether transcripts read it in full, in part (`head -100`,
+  Read `limit`) or only searched it, by which model; files of a used skill that are never read
 
 ## Prerequisites
 
@@ -54,7 +63,8 @@ asdf set rust latest          # writes .tool-versions in the repo
 ## Install / run
 
 ```bash
-make build && make install    # builds target/release/skillscope, installs to ~/bin
+brew install plinde/tap-private/skillscope   # release build (macOS arm64, Linux x86_64)
+make build                    # dev build: target/release/skillscope
 
 skillscope                    # TUI: skills -> sessions -> invocations drill-down
 skillscope .                  # fzf picker over sessions for the current cwd -> scoped TUI
@@ -67,22 +77,83 @@ skillscope projects           # per-project breakdown
 skillscope fidelity           # trigger-fidelity report
 skillscope report [skill]     # per-cwd session survey with trigger context
 skillscope inventory [skill]  # installed-skill inventory joined against invocation history
+skillscope lint [skill]       # reference-file rules for installed skills (--fail: exit 1 on findings)
+skillscope refs [skill]       # per bundled file: depth, lines, TOC, full/partial/search reads (--by-model)
+skillscope refs <skill> --reads  # the matched tool calls as JSON lines
 skillscope export             # JSON export of normalized invocations
+
+skillscope summary --harness all   # include Codex, pi and opencode history (default: claude)
 ```
+
+## Releases
+
+Every merge to `main` releases. `.github/workflows/release.yml` picks the next version (minor
+bump if any `feat` commit since the last `v*` tag, else patch; docs-only merges skip; a PR that
+already bumped `Cargo.toml` past the last tag sets the version), commits the `Cargo.toml` /
+`Cargo.lock` bump to `main` as `chore(release): vX.Y.Z`, tags it, then builds `aarch64-apple-darwin` (ad-hoc codesigned) and `x86_64-unknown-linux-musl` (static,
+any glibc), publishes a GitHub Release, and pushes `Formula/skillscope.rb` to
+`plinde/homebrew-tap-private` (needs the `TAP_GITHUB_TOKEN` secret); `brew upgrade` picks it up.
+PRs that touch the build inputs run the builds only. `workflow_dispatch` releases if `main` has
+unreleased changes, else builds only. A manual `v*` tag that matches `Cargo.toml` still releases
+exactly that tag.
 
 ## Data sources (JSONL schema, confirmed against live transcripts)
 
-1. **User slash invocation** — `type:"user"` line, `message.content` is a string containing
-   `<command-name>/foo</command-name>` (plus `<command-message>`, `<command-args>`).
-2. **Model-proactive invocation** — `type:"assistant"` line, `message.content[]` entry with
-   `type:"tool_use"`, `name:"Skill"`, `input.skill` = skill name, optional `input.args`.
-3. **Subagent transcripts** — `<project>/<session-uuid>/subagents/agent-*.jsonl`, same schema,
+1. **User slash invocation** (`user-slash`) — `type:"user"` line, `message.content` is a string
+   containing `<command-name>/foo</command-name>` (plus `<command-message>`, `<command-args>`).
+2. **Skill tool call** — `type:"assistant"` line, `message.content[]` entry with
+   `type:"tool_use"`, `name:"Skill"`, `input.skill` = skill name, optional `input.args`. Split by
+   the most recent real user prose before it:
+   - **`user-named`** — that prose names the skill as `/foo` or `$foo` (case-insensitive; for a
+     plugin skill `plugin:foo`, `/foo` counts too). The user asked for it; the model ran it.
+   - **`claude-proactive`** — nothing asked for it; the description/keyword trigger fired.
+
+   "Real user prose" is the text of a `type:"user"` line minus `<system-reminder>` blocks, and
+   skips tool results, `isMeta` lines, skill bodies (`Base directory for this skill…`),
+   interrupt markers, and anything carrying `<command-name>`, `<task-notification>`,
+   `<cross-session-message`, or local-command output. A typed `/command` line counts as the
+   user's latest input. Mentions must be whole tokens: `~/x/foo`, `/foo-bar`, `/foo.md` don't
+   name `foo`.
+3. **Direct read** (`direct-read`) — any other assistant `tool_use` (Read, Bash, Grep, …) whose
+   input contains `skills/<name>/SKILL.md`. One record per skill per message (Claude Code writes
+   a message's content blocks as separate lines sharing `message.id`). Writes/edits and
+   delegations (`Agent`, `Task`, `SendMessage`) are not reads.
+4. **Subagent transcripts** — `<project>/<session-uuid>/subagents/agent-*.jsonl`, same schema,
    tagged with `origin: subagent`.
-4. **`sessions-index.json`** — Claude Code's own per-project session index
+5. **Reference reads** (`skillscope refs`, a separate pass: invocation counts don't change) — any
+   tool call naming `skills/<name>/<relpath>` with relpath not `SKILL.md`, in Claude, Codex and pi
+   transcripts. The extent comes from the tool's own fields:
+   - **full** — Read with no `limit`/`offset`; `cat`, `nl`; `sed -n '1,$p'`.
+   - **partial** — Read `limit` (or `offset`); `head`/`tail` (`-N`, `-n N`; default 10);
+     `sed -n 'a,bp'`; `awk 'NR<=N'`. A `cat`/`nl` piped into one of these takes its bound.
+   - **search** — `grep`/`rg`, the Grep tool.
+   - **unknown** — anything else naming the file (running a script, `less`/`more`).
+
+   Shell commands are split at `|`, `&&`, `;` and only the segment naming the file decides.
+   Commands that don't read text (`ls`, `wc`, `git`, `sed -i`) and tools that only quote paths
+   (plans, todos) are skipped. The model is the assistant `message.model` (Claude, pi) or the
+   Codex `turn_context.model`. One record per file per message.
+6. **`sessions-index.json`** — Claude Code's own per-project session index
    (`firstPrompt`/`summary`/`gitBranch`/`modified`/`projectPath`), joined for friendlier session
    labels and recency sorting.
 
-Each transcript line also carries `sessionId`, `cwd`, `timestamp` (ISO 8601).
+Each transcript line also carries `sessionId`, `cwd`, `timestamp` (ISO 8601). Every exported
+record carries `harness` (`claude`, `codex`, `pi`, `opencode`).
+
+## Lint rules
+
+From Claude's [skill authoring best practices](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices):
+Claude may preview nested reference files with `head -100` and so read them only in part.
+
+| Rule | Level | Fires when | Source |
+|---|---|---|---|
+| `nested-ref` | error | a reference `.md` links another reference `.md` (markdown link or backticked name, outside code fences) | `#avoid-deeply-nested-references` |
+| `ref-over-100` | error | a reference `.md` is over 100 lines with no table of contents: split it by domain | local policy, `#pattern-2-domain-specific-organization` |
+| `ref-over-100-toc` | warn | as above, but a `## Contents` heading sits in its first 30 lines | `#structure-longer-reference-files-with-table-of-contents` |
+| `orphan-file` | warn | a bundled file nothing reachable from SKILL.md names (path, link, or a parent directory) | `#observe-how-claude-navigates-skills` |
+| `body-over-500` | error | SKILL.md body (after frontmatter) is over 500 lines | `#token-budgets` |
+
+`evals/`, `agents/openai.yaml` (Codex metadata), `LICENSE*` and dot-dirs are not bundled content.
 
 ## Data retention (read this before trusting long-range trends)
 
@@ -116,8 +187,9 @@ sessions."
 
 ```
 src/
-├── models.rs        # SkillInvocation, Origin, TriggerType
+├── models.rs        # SkillInvocation, RefRead, ReadExtent, Origin, TriggerType, Harness
 ├── parser.rs        # JSONL streaming extraction (main + subagent + scoped)
+├── harness.rs       # Codex, pi and opencode session stores
 ├── aggregate.rs      # counts, trigger breakdown, time-series, per-project rollups
 ├── sessions.rs        # sessions-index.json join
 ├── sessionscan.rs      # cwd -> session discovery for the `.` picker
@@ -126,6 +198,8 @@ src/
 ├── fidelity.rs            # skill discovery + TF-IDF trigger-fidelity heuristics
 ├── report.rs               # per-cwd session survey
 ├── inventory.rs             # installed-skill inventory join
+├── skilltree.rs             # skill dir walk: bundled files, links, depth, lint rules
+├── refreads.rs              # bundled-file reads + extent (full/partial/search) per tool call
 ├── cli.rs                    # clap subcommands + global flags
 └── tui/                       # ratatui: global + session-scoped drill-down views
 ```

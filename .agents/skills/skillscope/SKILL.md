@@ -1,9 +1,14 @@
 ---
 name: skillscope
-description: Analyze Claude Code skill-invocation history from local transcripts on request — what skills fired, when, in what context, and how (user `/slash` vs model-proactive vs subagent). Use when the user asks to inspect a specific session ("what skills did session abc123 invoke and when"), audit a skill's usage ("is my-skill actually firing / when did it last run"), survey activity in a project/cwd, spot trends over time, or find installed-but-never-fired skills. Backed by the `skillscope` CLI over `~/.claude/projects/**/*.jsonl`; drive it non-interactively with `export --json | jq`. Local-only, no admin console or org API.
+version: 1.3.0
+description: "Analyze skill-invocation history from local Claude Code (+ Codex, pi, opencode) transcripts with the `skillscope` CLI: what fired, when, how. Use for \"what skills did session X invoke\", \"is my-skill firing\", project/time surveys, linting skills, whether references get read in full. Read-only."
 ---
 
 # skillscope
+
+## When to use
+
+Analyze Claude Code skill-invocation history from local transcripts on request — what skills fired, when, in what context, and how (user `/slash`, user-named, model-proactive, direct SKILL.md read, subagent). Use when the user asks to inspect a specific session ("what skills did session abc123 invoke and when"), audit a skill's usage ("is my-skill actually firing / when did it last run"), survey activity in a project/cwd, spot trends over time, or find installed-but-never-fired skills. Also lint installed skills against the reference-file rules (`skillscope lint`: nested refs, refs over 100 lines, orphan files, long bodies) and show whether each bundled reference is read in full, in part or only searched, by model (`skillscope refs`). Backed by the `skillscope` CLI over `~/.claude/projects/**/*.jsonl` (plus Codex, pi and opencode history via `--harness`); drive it non-interactively with `export --json | jq`. Local-only, no admin console or org API.
 
 Answer questions about how Claude Code skills are being invoked, from the local JSONL transcripts
 under `~/.claude/projects/`. The job is **analysis on request** — the user names a session, a skill,
@@ -17,7 +22,8 @@ skillscope normalizes every skill invocation into a flat record. One JSON object
 | Field | Meaning |
 |-------|---------|
 | `skill_name` | The skill invoked |
-| `trigger_type` | **How** it fired: `user-slash` (user typed `/skill`) or `claude-proactive` (model called the Skill tool itself) |
+| `trigger_type` | **How** it fired: `user-slash` (user typed `/skill`), `user-named` (model called the Skill tool after the user's latest prose named it as `/skill` or `$skill`), `claude-proactive` (model called the Skill tool unprompted), or `direct-read` (SKILL.md loaded with Read/Bash/`exec_command` instead of the Skill tool) |
+| `harness` | `claude`, `codex`, `pi` or `opencode` — which agent recorded it |
 | `origin` | `main` (main session transcript) or `subagent` (fired inside a spawned subagent) |
 | `session_id` | Full session UUID |
 | `timestamp` | ISO-8601 UTC — **when** it fired |
@@ -30,20 +36,23 @@ The three axes the user usually asks about map to: **when** = `timestamp`, **wha
 
 ## Prerequisite: the binary
 
-Requires the `skillscope` CLI on `PATH`. Check, and build from the repo root if missing:
+Requires the `skillscope` CLI on `PATH`. Check, and install it from the private tap if missing:
 
 ```bash
-command -v skillscope || (cd "$(git rev-parse --show-toplevel)" && make build && make install)
+command -v skillscope || brew install plinde/tap-private/skillscope
 ```
 
 ## Primary workflow: `export --json | jq`
 
 The subcommands' default output is human tables, and the bare `skillscope` / `skillscope <TARGET>`
-forms open an interactive TUI — **not** usable non-interactively. For agent-driven analysis, always
-go through `export --json`, which streams every invocation as JSON lines, then slice with `jq`.
+forms open an interactive TUI — **not** usable non-interactively. For invocation analysis, go
+through `export --json`, which streams every invocation as JSON lines, then slice with `jq`. `lint`
+and `refs` take `--json` themselves (recipes below).
 
 Global filters that apply to every command: `--since <YYYY-MM-DD | 7d | 30d>`, `--origin main|subagent`,
-`--projects-dir <dir>` (point at a non-default transcript root).
+`--projects-dir <dir>` (point at a non-default transcript root), `--harness claude|codex|pi|opencode|all`
+(default `claude`; Codex/pi records are all `direct-read`, opencode `skill`-tool calls are
+`claude-proactive`; `report`, `fidelity` and the session TUIs stay Claude-only).
 
 ### "What skills did session `abc12345` invoke, when, and how?"
 
@@ -59,8 +68,8 @@ skillscope export --json \
 ```
 
 Present it as a chronological timeline: timestamp → skill → trigger type, with `args` as the
-context for why it fired. Call out the `user-slash` vs `claude-proactive` split explicitly — that's
-the "how" the user asked for. If the prefix matches more than one `session_id`, stop and report the
+context for why it fired. Call out the trigger split explicitly — that's the "how" the user asked
+for. If the prefix matches more than one `session_id`, stop and report the
 candidates (don't silently pick one).
 
 ### "How often did each trigger type fire in that session?"
@@ -97,7 +106,8 @@ skillscope projects --json               # per-project rollup across everything
 ### "Overall counts / trends"
 
 ```bash
-skillscope summary --json                # per-skill totals + user_slash/claude_proactive/subagent split
+skillscope summary --json                # per-skill totals + user_slash/user_named/claude_proactive/direct_read/subagent split
+skillscope summary --harness all --json  # same, across Claude Code, Codex, pi and opencode
 skillscope timeline --json               # daily series; add --week for weekly; add a [skill] to scope
 skillscope timeline <skill> --since 30d --json
 ```
@@ -113,6 +123,29 @@ on unrelated prompts (over-triggering), TF-IDF-weighted against each skill's fro
 `description`. Tunables (env): `SKILLSCOPE_TFIDF_THRESHOLD` (default 20.0),
 `SKILLSCOPE_MIN_SESSION_COUNT` (default 8).
 
+### "Is this skill's reference read in full, or only in part?"
+
+```bash
+skillscope refs <skill> --harness all --since 30d          # per bundled file
+skillscope refs <skill> --harness all --by-model --json    # split by model
+skillscope refs <skill> --reads | jq -c '{rel_path, extent, tool, model, session_id}'
+```
+
+Per file: depth below SKILL.md, lines, TOC, reads split into `full` / `partial` (`head -N`, Read
+`limit`, `sed -n 'a,bp'`) / `search` (`grep`/`rg`) / other (script runs). `!` marks a file of a
+skill used in the window that was never read. Check a surprising row with `--reads`.
+
+### "Lint my skills"
+
+```bash
+skillscope lint                      # every installed skill: manifest, vendored, plugin
+skillscope lint <skill> --fail       # exit 1 on any finding (for scripts and PR checks)
+```
+
+Rules: `nested-ref` (a reference links another reference), `ref-over-100` (split by domain;
+`ref-over-100-toc` if it has a contents list), `orphan-file` (nothing reachable from SKILL.md names
+it), `body-over-500`. Each finding names its docs anchor or "local policy".
+
 ## Interactive mode (hand back to the user)
 
 `skillscope` (global TUI) and `skillscope .` / `skillscope <session-id>` (session-scoped TUI, `Tab`
@@ -123,8 +156,10 @@ command themselves.
 ## Answering well
 
 - **Lead with the answer**, then the evidence. The user asked a question; the table is support.
-- **Always distinguish trigger types** — `user-slash` vs `claude-proactive` (vs `subagent` origin)
-  is usually the point of the question, not an afterthought.
+- **Always distinguish trigger types** — `user-slash` / `user-named` (user-directed) vs
+  `claude-proactive` (genuine description trigger) vs `direct-read` (file loaded around the Skill
+  tool), plus `subagent` origin, is usually the point of the question, not an afterthought. Only
+  `claude-proactive` is evidence the description itself triggers the skill.
 - **Use `args` as context.** When explaining *why* a skill fired, the args/prompt is the strongest
   signal; quote or summarize it.
 - **Timestamps are UTC.** Say so if local time matters to the user.

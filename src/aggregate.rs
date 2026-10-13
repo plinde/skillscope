@@ -6,15 +6,14 @@
 //!
 //! Port of `skillscope/aggregate.py`.
 
-use crate::models::{Origin, SkillInvocation, TriggerType};
+use crate::models::{Origin, SkillInvocation, TriggerCounts};
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct SkillCountEntry {
     pub total: usize,
-    pub user_slash: usize,
-    pub claude_proactive: usize,
+    pub triggers: TriggerCounts,
     pub subagent: usize,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
@@ -31,17 +30,13 @@ pub fn skill_counts(invs: &[SkillInvocation]) -> BTreeMap<String, SkillCountEntr
             .entry(inv.skill_name.clone())
             .or_insert_with(|| SkillCountEntry {
                 total: 0,
-                user_slash: 0,
-                claude_proactive: 0,
+                triggers: TriggerCounts::default(),
                 subagent: 0,
                 first_seen: inv.timestamp,
                 last_seen: inv.timestamp,
             });
         entry.total += 1;
-        match inv.trigger_type {
-            TriggerType::UserSlash => entry.user_slash += 1,
-            TriggerType::ClaudeProactive => entry.claude_proactive += 1,
-        }
+        entry.triggers.record(inv.trigger_type);
         if inv.origin == Origin::Subagent {
             entry.subagent += 1;
         }
@@ -95,7 +90,7 @@ pub fn sessions_for_skill(invs: &[SkillInvocation], skill: &str) -> Vec<SessionE
         }
     }
     let mut rows: Vec<SessionEntry> = sessions.into_values().collect();
-    rows.sort_by(|a, b| b.count.cmp(&a.count));
+    rows.sort_by_key(|a| std::cmp::Reverse(a.count));
     rows
 }
 
@@ -163,7 +158,7 @@ pub fn project_counts(invs: &[SkillInvocation]) -> BTreeMap<String, ProjectEntry
             .get(&project)
             .map(|m| m.iter().map(|(k, v)| (k.clone(), *v)).collect())
             .unwrap_or_default();
-        skills.sort_by(|a, b| b.1.cmp(&a.1));
+        skills.sort_by_key(|a| std::cmp::Reverse(a.1));
         skills.truncate(5);
         result.insert(
             project,

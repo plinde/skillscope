@@ -77,10 +77,7 @@ fn cwd_present_is_used_verbatim_and_absent_cwd_falls_back_to_decoded_dir_name() 
     let invs = parser::iter_invocations_main_only(&fixtures_dir());
 
     let worktree = invs.iter().find(|i| i.skill_name == "worktree").unwrap();
-    assert_eq!(
-        worktree.project_path,
-        "/Users/test/workspace/demo-project"
-    );
+    assert_eq!(worktree.project_path, "/Users/test/workspace/demo-project");
 
     // session-xyz.jsonl lines have no "cwd" field at all, so the project
     // path must come from decoding the containing directory name. The

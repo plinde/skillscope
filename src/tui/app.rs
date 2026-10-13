@@ -20,7 +20,9 @@ pub enum Level {
 pub enum SortKey {
     Total,
     Slash,
+    Named,
     Proactive,
+    Read,
     Subagent,
     LastSeen,
 }
@@ -29,8 +31,10 @@ impl SortKey {
     fn next(self) -> Self {
         match self {
             SortKey::Total => SortKey::Slash,
-            SortKey::Slash => SortKey::Proactive,
-            SortKey::Proactive => SortKey::Subagent,
+            SortKey::Slash => SortKey::Named,
+            SortKey::Named => SortKey::Proactive,
+            SortKey::Proactive => SortKey::Read,
+            SortKey::Read => SortKey::Subagent,
             SortKey::Subagent => SortKey::LastSeen,
             SortKey::LastSeen => SortKey::Total,
         }
@@ -40,7 +44,9 @@ impl SortKey {
         match self {
             SortKey::Total => "total",
             SortKey::Slash => "slash",
+            SortKey::Named => "named",
             SortKey::Proactive => "proactive",
+            SortKey::Read => "read",
             SortKey::Subagent => "subagent",
             SortKey::LastSeen => "last-seen",
         }
@@ -167,8 +173,26 @@ impl App {
 
         rows.sort_by(|a, b| match self.sort_key {
             SortKey::Total => b.stats.total.cmp(&a.stats.total),
-            SortKey::Slash => b.stats.user_slash.cmp(&a.stats.user_slash),
-            SortKey::Proactive => b.stats.claude_proactive.cmp(&a.stats.claude_proactive),
+            SortKey::Slash => b
+                .stats
+                .triggers
+                .user_slash
+                .cmp(&a.stats.triggers.user_slash),
+            SortKey::Named => b
+                .stats
+                .triggers
+                .user_named
+                .cmp(&a.stats.triggers.user_named),
+            SortKey::Proactive => b
+                .stats
+                .triggers
+                .claude_proactive
+                .cmp(&a.stats.triggers.claude_proactive),
+            SortKey::Read => b
+                .stats
+                .triggers
+                .direct_read
+                .cmp(&a.stats.triggers.direct_read),
             SortKey::Subagent => b.stats.subagent.cmp(&a.stats.subagent),
             SortKey::LastSeen => b.stats.last_seen.cmp(&a.stats.last_seen),
         });
@@ -380,7 +404,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Origin, TriggerType};
+    use crate::models::{Harness, Origin, TriggerType};
     use chrono::TimeZone;
 
     fn inv(skill: &str, session: &str, hour: u32, origin: Origin) -> SkillInvocation {
@@ -393,6 +417,7 @@ mod tests {
             transcript_file: "/tmp/t.jsonl".to_string(),
             args: None,
             origin,
+            harness: Harness::Claude,
         }
     }
 
