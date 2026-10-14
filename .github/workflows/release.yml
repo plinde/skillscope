@@ -98,7 +98,12 @@ jobs:
             echo "only docs changed since $last; skipping"; exit 0
           fi
           IFS=. read -r major minor patch <<<"${last#v}"
-          if git log --format=%s "$range" | grep -v '^chore(release):' | grep -qE '^feat(\(|:|!)'; then
+          # Breaking change (`type!:` subject or `BREAKING CHANGE:` footer) -> major,
+          # or minor while 0.x; feat -> minor; anything else -> patch.
+          if git log --format='%s%n%b' "$range" | grep -v '^chore(release):' | grep -qE '^[a-z]+(\([^)]*\))?!:|^BREAKING[ -]CHANGE:'; then
+            if [ "$major" -ge 1 ]; then major=$((major + 1)); minor=0; else minor=$((minor + 1)); fi
+            patch=0
+          elif git log --format=%s "$range" | grep -v '^chore(release):' | grep -qE '^feat(\(|:|!)'; then
             minor=$((minor + 1)); patch=0
           else
             patch=$((patch + 1))
