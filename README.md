@@ -90,7 +90,7 @@ skillscope summary --harness all   # include Codex, pi and opencode history (def
 Every merge to `main` releases. `.github/workflows/release.yml` picks the next version (minor
 bump if any `feat` commit since the last `v*` tag, else patch; docs-only merges skip; a PR that
 already bumped `Cargo.toml` past the last tag sets the version), commits the `Cargo.toml` /
-`Cargo.lock` bump to `main` as `chore(release): vX.Y.Z`, tags it, then builds `aarch64-apple-darwin` (ad-hoc codesigned) and `x86_64-unknown-linux-musl` (static,
+`Cargo.lock` bump to `main` as `chore(release): vX.Y.Z`, tags it, then builds, all on `ubuntu-latest`, `aarch64-apple-darwin` (cross-built with cargo-zigbuild, ad-hoc signed by zig's linker) and `x86_64-unknown-linux-musl` (static,
 any glibc), publishes a GitHub Release, and pushes `Formula/skillscope.rb` to
 `plinde/homebrew-tap-private` (needs the `TAP_GITHUB_TOKEN` secret); `brew upgrade` picks it up.
 PRs that touch the build inputs run the builds only. `workflow_dispatch` releases if `main` has
