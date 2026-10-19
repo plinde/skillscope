@@ -13,7 +13,7 @@ Claude Code by default. `--harness` selects whose history to read:
 | `claude` (default) | `~/.claude/projects/**/*.jsonl` | every trigger type below |
 | `codex` | `~/.codex/sessions/**/*.jsonl` rollouts | `direct-read`: a `function_call` / `custom_tool_call` whose arguments reference `skills/<name>/SKILL.md` |
 | `pi` | `~/.pi/agent/sessions/*/*.jsonl` | `direct-read`: an assistant `toolCall` whose arguments reference a SKILL.md |
-| `opencode` | `~/.local/share/opencode/opencode.db` | `claude-proactive`: a call to opencode's native `skill` tool (read via the `sqlite3` CLI) |
+| `opencode` | `~/.local/share/opencode/opencode.db` | `claude-proactive`: a call to opencode's native `skill` tool (read via the `sqlite3` CLI; V1 `part` and V2 `session_message` schemas, migrated sessions counted once) |
 | `all` | every store that exists | — |
 
 Codex and pi have no Skill tool — an agent uses a skill by reading its file — so only tool-call

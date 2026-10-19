@@ -9,7 +9,9 @@
 //! - **opencode** (`~/.local/share/opencode/opencode.db`) has a native
 //!   `skill` tool; its calls are recorded as `claude-proactive`, the
 //!   counterpart of Claude Code's Skill tool. The SQLite store is queried
-//!   through the `sqlite3` CLI rather than a linked driver.
+//!   through the `sqlite3` CLI rather than a linked driver. Both schemas are
+//!   read: V1 (`session` + `part`) and V2 (`session_v2` + `session_message`,
+//!   2.x), with V1 rows only for sessions not copied into `session_v2`.
 //!
 //! Missing stores yield no records: `--harness all` on a machine without
 //! one of these harnesses is not an error.
@@ -243,17 +245,87 @@ pub fn iter_pi_invocations(sessions_dir: &Path) -> Vec<SkillInvocation> {
     out
 }
 
-const OPENCODE_SKILL_QUERY: &str = "\
+/// opencode V1 (1.x): one `part` row per tool call.
+const OPENCODE_V1_SKILL_SELECT: &str = "\
 SELECT p.session_id AS session_id, \
        p.time_created AS time_created, \
        json_extract(p.data, '$.state.input.name') AS skill, \
        s.directory AS directory, \
        s.parent_id AS parent_id \
 FROM part p JOIN session s ON s.id = p.session_id \
-WHERE json_extract(p.data, '$.tool') = 'skill' \
-ORDER BY p.time_created";
+WHERE json_extract(p.data, '$.tool') = 'skill'";
 
-/// Parse `sqlite3 -json` output of `OPENCODE_SKILL_QUERY` into records.
+/// opencode V2 (2.x): tool calls are `{type:"tool", name, state:{input}}`
+/// items in an assistant `session_message`'s `$.content` array.
+const OPENCODE_V2_SKILL_SELECT: &str = "\
+SELECT m.session_id AS session_id, \
+       COALESCE(json_extract(c.value, '$.time.created'), m.time_created) AS time_created, \
+       json_extract(c.value, '$.state.input.name') AS skill, \
+       s.directory AS directory, \
+       s.parent_id AS parent_id \
+FROM session_message m \
+JOIN session_v2 s ON s.id = m.session_id, \
+     json_each(m.data, '$.content') c \
+WHERE m.type = 'assistant' \
+  AND json_extract(c.value, '$.type') = 'tool' \
+  AND json_extract(c.value, '$.name') = 'skill'";
+
+const OPENCODE_V2_DETECT_QUERY: &str = "\
+SELECT COUNT(*) AS n FROM sqlite_master \
+WHERE type = 'table' AND name IN ('session_v2', 'session_message')";
+
+/// The skill-call query for a database with (`has_v2`) or without the V2
+/// tables. A V2 host keeps the frozen V1 tables and copies every V1 session
+/// into `session_v2`, so V1 rows are only read for sessions V2 lacks.
+fn opencode_skill_query(has_v2: bool) -> String {
+    if has_v2 {
+        format!(
+            "{OPENCODE_V2_SKILL_SELECT} UNION ALL {OPENCODE_V1_SKILL_SELECT} \
+             AND p.session_id NOT IN (SELECT id FROM session_v2) \
+             ORDER BY time_created"
+        )
+    } else {
+        format!("{OPENCODE_V1_SKILL_SELECT} ORDER BY time_created")
+    }
+}
+
+/// Run one read-only `sqlite3 -json` query against `db_path`.
+fn sqlite3_json(db_path: &Path, sql: &str) -> Result<String, String> {
+    let output = Command::new("sqlite3")
+        .arg("-readonly")
+        .arg("-json")
+        .arg(db_path)
+        .arg(sql)
+        .output()
+        .map_err(|e| {
+            format!(
+                "cannot run sqlite3 ({e}); install it to read {}",
+                db_path.display()
+            )
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "sqlite3 failed on {}: {}",
+            db_path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Whether the store has opencode V2's `session_v2` + `session_message`.
+fn opencode_has_v2(db_path: &Path) -> Result<bool, String> {
+    let json = sqlite3_json(db_path, OPENCODE_V2_DETECT_QUERY)?;
+    let rows: Vec<Value> =
+        serde_json::from_str(json.trim()).map_err(|e| format!("unreadable sqlite3 output: {e}"))?;
+    Ok(rows
+        .first()
+        .and_then(|r| r.get("n"))
+        .and_then(|v| v.as_i64())
+        == Some(2))
+}
+
+/// Parse `sqlite3 -json` output of `opencode_skill_query` into records.
 fn parse_opencode_rows(json: &str, db_path: &str) -> Result<Vec<SkillInvocation>, String> {
     // sqlite3 prints nothing at all (not `[]`) for an empty result set.
     if json.trim().is_empty() {
@@ -304,36 +376,17 @@ fn parse_opencode_rows(json: &str, db_path: &str) -> Result<Vec<SkillInvocation>
     Ok(out)
 }
 
-/// opencode `skill` tool calls from its SQLite store. A missing database is
+/// opencode `skill` tool calls from its SQLite store, V1 (`part`) and V2
+/// (`session_message`) schemas alike. A missing database is
 /// an empty result; a database that can't be queried (no `sqlite3` on PATH,
 /// schema change) is an error the caller reports and skips.
 pub fn iter_opencode_invocations(db_path: &Path) -> Result<Vec<SkillInvocation>, String> {
     if !db_path.is_file() {
         return Ok(Vec::new());
     }
-    let output = Command::new("sqlite3")
-        .arg("-readonly")
-        .arg("-json")
-        .arg(db_path)
-        .arg(OPENCODE_SKILL_QUERY)
-        .output()
-        .map_err(|e| {
-            format!(
-                "cannot run sqlite3 ({e}); install it to read {}",
-                db_path.display()
-            )
-        })?;
-    if !output.status.success() {
-        return Err(format!(
-            "sqlite3 failed on {}: {}",
-            db_path.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    parse_opencode_rows(
-        &String::from_utf8_lossy(&output.stdout),
-        &db_path.to_string_lossy(),
-    )
+    let has_v2 = opencode_has_v2(db_path)?;
+    let json = sqlite3_json(db_path, &opencode_skill_query(has_v2))?;
+    parse_opencode_rows(&json, &db_path.to_string_lossy())
 }
 
 #[cfg(test)]
@@ -463,5 +516,189 @@ mod tests {
         assert!(iter_codex_invocations(&absent).is_empty());
         assert!(iter_pi_invocations(&absent).is_empty());
         assert!(iter_opencode_invocations(&absent).unwrap().is_empty());
+    }
+
+    // ---- opencode fixture DBs (need the sqlite3 CLI, like the reader) ----
+
+    const OC_V1_SCHEMA: &str = "
+CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT);
+CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT);
+CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+  time_created INTEGER, data TEXT);
+";
+
+    const OC_V2_SCHEMA: &str = "
+CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT);
+CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT,
+  seq INTEGER, time_created INTEGER, data TEXT);
+";
+
+    fn oc_v1_session(id: &str, parent: Option<&str>, dir: &str) -> String {
+        let parent = parent.map_or("NULL".to_string(), |p| format!("'{p}'"));
+        format!("INSERT INTO session VALUES ('{id}',{parent},'{dir}');")
+    }
+
+    fn oc_v2_session(id: &str, parent: Option<&str>, dir: &str) -> String {
+        let parent = parent.map_or("NULL".to_string(), |p| format!("'{p}'"));
+        format!("INSERT INTO session_v2 VALUES ('{id}',{parent},'{dir}');")
+    }
+
+    fn oc_v1_part(id: &str, sid: &str, t: i64, tool: &str, skill: &str) -> String {
+        format!(
+            "INSERT INTO part VALUES ('{id}','m','{sid}',{t},\
+             '{{\"type\":\"tool\",\"tool\":\"{tool}\",\"state\":{{\"input\":{{\"name\":\"{skill}\"}}}}}}');"
+        )
+    }
+
+    /// An assistant V2 message with one `skill` call per name plus a
+    /// non-skill tool call and a text item.
+    fn oc_v2_message(id: &str, sid: &str, ty: &str, t: i64, skills: &[&str]) -> String {
+        let mut items = vec![
+            r#"{"type":"text","text":"skill: fake"}"#.to_string(),
+            r#"{"type":"tool","id":"b","name":"bash","state":{"input":{"name":"not-a-skill"}}}"#
+                .to_string(),
+        ];
+        for (i, s) in skills.iter().enumerate() {
+            items.push(format!(
+                r#"{{"type":"tool","id":"c{i}","name":"skill","state":{{"status":"completed","input":{{"name":"{s}"}}}},"time":{{"created":{}}}}}"#,
+                t + 1 + i as i64
+            ));
+        }
+        format!(
+            "INSERT INTO session_message VALUES ('{id}','{sid}','{ty}',1,{t},'{{\"content\":[{}]}}');",
+            items.join(",")
+        )
+    }
+
+    /// Build a fixture DB; `None` when the sqlite3 CLI is unavailable.
+    fn oc_fixture(tmp: &TempDir, stmts: &[String]) -> Option<PathBuf> {
+        use std::process::Stdio;
+        let db = tmp.path().join("opencode.db");
+        let mut child = Command::new("sqlite3")
+            .arg(&db)
+            .stdin(Stdio::piped())
+            .spawn()
+            .ok()?;
+        child
+            .stdin
+            .take()?
+            .write_all(stmts.join("\n").as_bytes())
+            .ok()?;
+        assert!(child.wait().ok()?.success(), "fixture SQL failed");
+        Some(db)
+    }
+
+    fn summary(invs: &[SkillInvocation]) -> Vec<(String, String, i64, Origin)> {
+        invs.iter()
+            .map(|i| {
+                (
+                    i.session_id.clone(),
+                    i.skill_name.clone(),
+                    i.timestamp.timestamp_millis(),
+                    i.origin,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn opencode_v1_only_db() {
+        let tmp = TempDir::new().unwrap();
+        let Some(db) = oc_fixture(
+            &tmp,
+            &[
+                OC_V1_SCHEMA.to_string(),
+                oc_v1_session("a", None, "/w"),
+                oc_v1_session("b", Some("a"), "/w"),
+                oc_v1_part("p1", "a", 2000, "skill", "kb"),
+                oc_v1_part("p2", "b", 1000, "skill", "html"),
+                oc_v1_part("p3", "a", 3000, "bash", "nope"),
+            ],
+        ) else {
+            return;
+        };
+        let invs = iter_opencode_invocations(&db).unwrap();
+        assert_eq!(
+            summary(&invs),
+            vec![
+                ("b".into(), "html".into(), 1000, Origin::Subagent),
+                ("a".into(), "kb".into(), 2000, Origin::Main),
+            ]
+        );
+        assert!(invs.iter().all(|i| i.project_path == "/w"
+            && i.harness == Harness::Opencode
+            && i.trigger_type == TriggerType::ClaudeProactive));
+    }
+
+    #[test]
+    fn opencode_v2_only_db() {
+        let tmp = TempDir::new().unwrap();
+        let Some(db) = oc_fixture(
+            &tmp,
+            &[
+                OC_V1_SCHEMA.to_string(),
+                OC_V2_SCHEMA.to_string(),
+                oc_v2_session("c", None, "/v2"),
+                oc_v2_session("d", Some("c"), "/v2"),
+                oc_v2_message("m1", "c", "assistant", 5000, &["kb", "worktree"]),
+                oc_v2_message("m2", "d", "assistant", 4000, &["mfa"]),
+                // Only assistant messages carry tool calls.
+                oc_v2_message("m3", "c", "user", 6000, &["ignored"]),
+            ],
+        ) else {
+            return;
+        };
+        let invs = iter_opencode_invocations(&db).unwrap();
+        assert_eq!(
+            summary(&invs),
+            vec![
+                ("d".into(), "mfa".into(), 4001, Origin::Subagent),
+                ("c".into(), "kb".into(), 5001, Origin::Main),
+                ("c".into(), "worktree".into(), 5002, Origin::Main),
+            ]
+        );
+        assert!(invs.iter().all(|i| i.project_path == "/v2"));
+    }
+
+    #[test]
+    fn opencode_mixed_db_reads_v1_only_for_sessions_missing_from_v2() {
+        let tmp = TempDir::new().unwrap();
+        let Some(db) = oc_fixture(
+            &tmp,
+            &[
+                OC_V1_SCHEMA.to_string(),
+                OC_V2_SCHEMA.to_string(),
+                // "dup" was migrated: present in both stores, counted once.
+                oc_v1_session("dup", None, "/w"),
+                oc_v1_part("p1", "dup", 1000, "skill", "kb"),
+                oc_v2_session("dup", None, "/w"),
+                oc_v2_message("m1", "dup", "assistant", 999, &["kb"]),
+                // V1-only session (not copied into session_v2).
+                oc_v1_session("old", None, "/old"),
+                oc_v1_part("p2", "old", 500, "skill", "html"),
+                // V2-native session.
+                oc_v2_session("new", None, "/new"),
+                oc_v2_message("m2", "new", "assistant", 9000, &["aws"]),
+            ],
+        ) else {
+            return;
+        };
+        let invs = iter_opencode_invocations(&db).unwrap();
+        assert_eq!(
+            summary(&invs),
+            vec![
+                ("old".into(), "html".into(), 500, Origin::Main),
+                ("dup".into(), "kb".into(), 1000, Origin::Main),
+                ("new".into(), "aws".into(), 9001, Origin::Main),
+            ]
+        );
+    }
+
+    #[test]
+    fn opencode_query_shape() {
+        assert!(!opencode_skill_query(false).contains("session_v2"));
+        let q = opencode_skill_query(true);
+        assert!(q.contains("FROM session_message"));
+        assert!(q.contains("NOT IN (SELECT id FROM session_v2)"));
     }
 }
