@@ -4,19 +4,22 @@ name: Release
 # (plinde/cron-launchagent) installs the latest build. The `tag` job picks the
 # next version: minor bump if any `feat` commit since the last v* tag, else
 # patch; skipped when main HEAD is already tagged or only *.md changed. If a PR
-# already bumped Cargo.toml past the last tag, that version wins. It commits the
-# Cargo.toml/Cargo.lock bump to main as `chore(release): vX.Y.Z`, tags that
-# commit, and the build + release jobs then run against the tag, so Cargo.toml
-# stays the source of truth and the tag/Cargo.toml check below keeps holding.
+# already bumped Cargo.toml past the last tag, that version wins. It pushes only
+# the tag: main is branch-protected (changes only through a pull request, admins
+# included), so a bump commit from this workflow is rejected (GH006, 2026-11-11).
+# The build job stamps the tag's version into Cargo.toml/Cargo.lock in its
+# checkout, so `skillscope --version` matches the tag; the committed Cargo.toml
+# version is a floor that only moves when a PR bumps it. Same tag-only shape as
+# the Go tools' release workflows (gwtui, ghwatch).
 #
 # Triggers: the "Auto-merge on green" step in ci.yml merges with GITHUB_TOKEN,
 # and GITHUB_TOKEN pushes start no `push` workflows. So the auto-merge path is
 # caught via workflow_run on the CI gate (the merge happens inside that run); a
 # human merge fires `push: main`. Both can fire for one merge, and a CI run on
 # an unmerged PR also fires workflow_run: the "HEAD already tagged" check makes
-# the extra runs no-ops. The bump commit and tag are pushed with GITHUB_TOKEN,
-# so they start no further runs (no loop); that is also why tagging and the
-# release share this workflow run. A manual `v*` tag push still releases exactly
+# the extra runs no-ops. The tag is pushed with GITHUB_TOKEN, so it starts no
+# further runs (no loop); that is also why tagging and the release share this
+# workflow run. A manual `v*` tag push still releases exactly
 # that tag.
 #
 # A `v*` tag builds skillscope for each Homebrew target, publishes a GitHub
@@ -84,7 +87,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Bump Cargo.toml, commit, tag
+      - name: Pick the next version and push its tag
         id: tag
         run: |
           set -euo pipefail
@@ -114,21 +117,11 @@ jobs:
           if [ "v$cargo_version" != "$last" ] && ! git rev-parse -q --verify "refs/tags/v$cargo_version" >/dev/null; then
             next="v$cargo_version"
           fi
-          version="${next#v}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [ "$cargo_version" != "$version" ]; then
-            # Only the [package] version (the first `version =` line) and this
-            # crate's Cargo.lock entry change; dependency versions are untouched.
-            perl -0pi -e "s/^version = \"[^\"]*\"/version = \"$version\"/m" Cargo.toml
-            perl -0pi -e "s/(name = \"skillscope\"\nversion = )\"[^\"]*\"/\$1\"$version\"/" Cargo.lock
-            git add Cargo.toml Cargo.lock
-            git commit -m "chore(release): $next"
-          fi
+          # Tag only, never a commit to main (branch protection; see the header).
           git tag -a "$next" -m "release $next"
-          # Atomic: if main moved under us, neither the bump nor the tag lands
-          # and the next merge's run releases instead.
-          git push --atomic origin HEAD:refs/heads/main "refs/tags/$next"
+          git push origin "refs/tags/$next"
           echo "tagged $next (from $last)"
           echo "tag=$next" >> "$GITHUB_OUTPUT"
 
@@ -162,11 +155,21 @@ jobs:
           # The tag cut by the `tag` job; empty = the event's own ref.
           ref: ${{ needs.tag.outputs.tag }}
 
-      - name: Tag matches Cargo.toml version
+      # Not committed: main only takes changes through PRs. Only the [package]
+      # version (the first `version =` line) and this crate's Cargo.lock entry
+      # change, so `--locked` still holds and dependencies are untouched.
+      - name: Stamp the tag's version into Cargo.toml and Cargo.lock
         if: env.TAG != ''
         run: |
-          want="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          [ "$want" = "$TAG" ] || { echo "::error::tag $TAG != Cargo.toml $want"; exit 1; }
+          set -euo pipefail
+          version="${TAG#v}"
+          perl -0pi -e "s/^version = \"[^\"]*\"/version = \"$version\"/m" Cargo.toml
+          perl -0pi -e "s/(name = \"skillscope\"\nversion = )\"[^\"]*\"/\$1\"$version\"/" Cargo.lock
+          got="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "$got" = "$version" ] || { echo "::error::stamped Cargo.toml says $got, want $version"; exit 1; }
+          grep -A1 '^name = "skillscope"$' Cargo.lock | grep -qx "version = \"$version\"" \
+            || { echo "::error::Cargo.lock entry for skillscope not stamped to $version"; exit 1; }
+          echo "building $TAG as skillscope $version"
 
       - name: Install pinned toolchain and target
         if: ${{ !matrix.zigbuild }}
@@ -180,7 +183,13 @@ jobs:
 
       - name: Smoke
         if: ${{ !matrix.zigbuild }}
-        run: target/${{ matrix.target }}/release/skillscope --version
+        run: |
+          set -euo pipefail
+          out="$(target/${{ matrix.target }}/release/skillscope --version)"
+          echo "$out"
+          if [ -n "$TAG" ]; then
+            [ "$out" = "skillscope ${TAG#v}" ] || { echo "::error::binary reports '$out', want 'skillscope ${TAG#v}'"; exit 1; }
+          fi
 
       # Can't exec a Mach-O here, so the smoke is: it is an arm64 Mach-O and
       # carries the embedded (ad-hoc) code signature the kernel insists on.
