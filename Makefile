@@ -51,6 +51,8 @@ smoke: build ## Smoke-test every subcommand against the live corpus
 	./target/release/$(BINARY) inventory >/dev/null
 	./target/release/$(BINARY) lint >/dev/null
 	./target/release/$(BINARY) refs --since 7d >/dev/null
+	./target/release/$(BINARY) rundown path >/dev/null
+	./target/release/$(BINARY) rundown list >/dev/null 2>&1
 	@./target/release/$(BINARY) 0000 2>/dev/null; test $$? -eq 1 || { echo "bad-target check failed"; exit 1; }
 	@echo "All subcommands OK"
 

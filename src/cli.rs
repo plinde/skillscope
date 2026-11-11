@@ -10,15 +10,17 @@ use crate::harness;
 use crate::models::{
     Harness, Origin, ReadExtent, RefRead, SkillInvocation, TriggerCounts, TriggerType,
 };
-use crate::parser::iter_invocations;
+use crate::parser::{iter_invocations, iter_invocations_for_session};
 use crate::refreads;
+use crate::resolve::resolve_session_id;
+use crate::rundown;
 use crate::sessions::{load_session_index, session_branch, session_label};
 use crate::skilltree::{self, Finding, Severity, SkillTree};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn home_dir() -> PathBuf {
     std::env::var("HOME")
@@ -162,6 +164,49 @@ pub enum Command {
         #[arg(long)]
         reads: bool,
     },
+    /// Saved session rundowns: a written summary plus a snapshot of the
+    /// session's invocations, kept under the XDG data dir
+    Rundown {
+        #[command(subcommand)]
+        action: RundownAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RundownAction {
+    /// Save a rundown for one Claude Code session: snapshot its
+    /// invocations and, with --summary-file, a written summary
+    Save {
+        /// Session id or >=8-char hex prefix (default: $CLAUDE_CODE_SESSION_ID)
+        session: Option<String>,
+        /// Markdown summary to store with the snapshot; `-` reads stdin
+        #[arg(long, value_name = "PATH")]
+        summary_file: Option<PathBuf>,
+        /// Who wrote the summary (free-form, e.g. an agent or session tag)
+        #[arg(long)]
+        author: Option<String>,
+    },
+    /// List saved rundowns, newest first (--since filters on save time)
+    List {
+        /// Only rundowns whose session invoked this skill
+        #[arg(long)]
+        skill: Option<String>,
+    },
+    /// Show the newest rundown for a session, or one rundown file
+    Show {
+        /// Session id, >=8-char hex prefix, or path to a rundown .json
+        target: String,
+    },
+    /// Case-insensitive search over summaries, skill names, skill args
+    /// and project paths
+    Search {
+        query: String,
+        /// Only rundowns whose session invoked this skill
+        #[arg(long)]
+        skill: Option<String>,
+    },
+    /// Print the directory rundowns are stored in
+    Path,
 }
 
 impl Cli {
@@ -1053,6 +1098,240 @@ pub fn cmd_refs(
     );
     println!("Other = extent unknown (script runs, pagers).");
     println!("! = skill used in the window but this file never read.");
+}
+
+fn rundown_fail(msg: impl std::fmt::Display) -> ! {
+    eprintln!("skillscope: {msg}");
+    std::process::exit(1);
+}
+
+/// One line of `rundown list --json` / `rundown search --json`.
+#[derive(Serialize)]
+struct RundownIndexJson<'a> {
+    path: String,
+    saved_at: String,
+    session_id: &'a str,
+    project_path: Option<&'a str>,
+    invocations: usize,
+    skills: Vec<&'a str>,
+    headline: Option<String>,
+    author: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    r#match: Option<&'a str>,
+}
+
+pub fn cmd_rundown(cli: &Cli, action: &RundownAction) {
+    let store = rundown::rundowns_dir(&rundown::data_dir());
+    match action {
+        RundownAction::Path => {
+            if cli.json {
+                print_json(&serde_json::json!({ "path": store }));
+            } else {
+                println!("{}", store.display());
+            }
+        }
+        RundownAction::Save {
+            session,
+            summary_file,
+            author,
+        } => rundown_save(
+            cli,
+            &store,
+            session.as_deref(),
+            summary_file.as_deref(),
+            author.as_deref(),
+        ),
+        RundownAction::List { skill } => rundown_list(cli, &store, skill.as_deref(), None),
+        RundownAction::Search { query, skill } => {
+            rundown_list(cli, &store, skill.as_deref(), Some(query))
+        }
+        RundownAction::Show { target } => rundown_show(cli, &store, target),
+    }
+}
+
+fn read_summary(path: &Path) -> String {
+    use std::io::Read;
+    if path == Path::new("-") {
+        let mut text = String::new();
+        if let Err(e) = std::io::stdin().read_to_string(&mut text) {
+            rundown_fail(format!("reading summary from stdin: {e}"));
+        }
+        text
+    } else {
+        std::fs::read_to_string(path)
+            .unwrap_or_else(|e| rundown_fail(format!("reading {}: {e}", path.display())))
+    }
+}
+
+fn rundown_save(
+    cli: &Cli,
+    store: &Path,
+    session: Option<&str>,
+    summary_file: Option<&Path>,
+    author: Option<&str>,
+) {
+    if cli.harness != HarnessFilter::Claude {
+        rundown_fail("rundown save reads Claude Code transcripts only (--harness claude)");
+    }
+    let target = match session {
+        Some(s) => s.to_string(),
+        None => std::env::var("CLAUDE_CODE_SESSION_ID")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                rundown_fail("no session given and $CLAUDE_CODE_SESSION_ID is not set")
+            }),
+    };
+    let transcript = resolve_session_id(&cli.resolved_projects_dir(), &target)
+        .unwrap_or_else(|e| rundown_fail(e));
+    let session_id = transcript
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&target)
+        .to_string();
+    let summary = summary_file.map(read_summary);
+    let invocations = iter_invocations_for_session(&transcript);
+    let record = rundown::Rundown::build(
+        &session_id,
+        &transcript,
+        invocations,
+        rundown::transcript_cwd(&transcript),
+        summary,
+        author.map(str::to_string),
+        Utc::now(),
+    );
+    let path = rundown::save(store, &record)
+        .unwrap_or_else(|e| rundown_fail(format!("saving rundown: {e}")));
+    if cli.json {
+        print_json(&serde_json::json!({
+            "path": path,
+            "session_id": record.session_id,
+            "invocations": record.invocations.len(),
+            "summary": record.summary.is_some(),
+        }));
+    } else {
+        println!("{}", path.display());
+    }
+}
+
+fn rundown_list(cli: &Cli, store: &Path, skill: Option<&str>, query: Option<&str>) {
+    let since = cli.resolved_since();
+    let query_lower = query.map(str::to_lowercase);
+    let mut all = rundown::load_all(store);
+    all.reverse(); // newest first
+    let mut rows: Vec<(&PathBuf, &rundown::Rundown, Option<String>)> = Vec::new();
+    for (path, r) in &all {
+        if since.is_some_and(|s| r.saved_at < s) {
+            continue;
+        }
+        if let Some(skill) = skill
+            && !r.skills.contains_key(skill)
+        {
+            continue;
+        }
+        let hit = match &query_lower {
+            Some(q) => match r.find(q) {
+                Some(snippet) => Some(snippet),
+                None => continue,
+            },
+            None => None,
+        };
+        rows.push((path, r, hit));
+    }
+
+    if cli.json {
+        use std::io::Write;
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        for (path, r, hit) in &rows {
+            let line = RundownIndexJson {
+                path: path.to_string_lossy().to_string(),
+                saved_at: r.saved_at.to_rfc3339(),
+                session_id: &r.session_id,
+                project_path: r.project_path.as_deref(),
+                invocations: r.invocations.len(),
+                skills: r.skills.keys().map(String::as_str).collect(),
+                headline: r.headline(),
+                author: r.author.as_deref(),
+                r#match: hit.as_deref(),
+            };
+            if writeln!(lock, "{}", serde_json::to_string(&line).unwrap()).is_err() {
+                break;
+            }
+        }
+        return;
+    }
+
+    if rows.is_empty() {
+        eprintln!("No saved rundowns match (store: {}).", store.display());
+        return;
+    }
+    let last_column = if query.is_some() { "MATCH" } else { "HEADLINE" };
+    println!(
+        "{:<17} {:<9} {:>4} {:<24} {}",
+        "SAVED (UTC)", "SESSION", "INV", "PROJECT", last_column
+    );
+    for (_, r, hit) in &rows {
+        let project = r
+            .project_path
+            .as_deref()
+            .and_then(|p| Path::new(p).file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let text = hit.clone().or_else(|| r.headline()).unwrap_or_default();
+        println!(
+            "{:<17} {:<9} {:>4} {:<24} {}",
+            r.saved_at.format("%Y-%m-%d %H:%M"),
+            r.session_id.chars().take(8).collect::<String>(),
+            r.invocations.len(),
+            rundown::truncate(&project, 24),
+            rundown::truncate(&text, 70)
+        );
+    }
+}
+
+fn rundown_show(cli: &Cli, store: &Path, target: &str) {
+    let all = rundown::load_all(store);
+    let (path, r) = rundown::latest_for(&all, target).unwrap_or_else(|e| rundown_fail(e));
+    if cli.json {
+        print_json(&r);
+        return;
+    }
+    println!("session     {}", r.session_id);
+    println!("saved       {}", r.saved_at.format("%Y-%m-%d %H:%M:%S UTC"));
+    println!("file        {}", path.display());
+    if let Some(project) = &r.project_path {
+        println!("project     {project}");
+    }
+    if let Some(author) = &r.author {
+        println!("author      {author}");
+    }
+    println!(
+        "invocations {} (user-slash {}, user-named {}, claude-proactive {}, direct-read {})",
+        r.invocations.len(),
+        r.triggers.user_slash,
+        r.triggers.user_named,
+        r.triggers.claude_proactive,
+        r.triggers.direct_read
+    );
+    if let Some(summary) = &r.summary {
+        println!("\n{}\n", summary.trim_end());
+    }
+    if !r.invocations.is_empty() {
+        println!(
+            "{:<20} {:<28} {:<17} ORIGIN",
+            "TIME (UTC)", "SKILL", "TRIGGER"
+        );
+        for inv in &r.invocations {
+            println!(
+                "{:<20} {:<28} {:<17} {}",
+                inv.timestamp.format("%Y-%m-%d %H:%M:%S"),
+                rundown::truncate(&inv.skill_name, 28),
+                inv.trigger_type,
+                inv.origin
+            );
+        }
+    }
 }
 
 #[cfg(test)]

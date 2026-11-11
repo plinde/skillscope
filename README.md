@@ -43,6 +43,9 @@ grepping whole lines would count every skill in every session. Session-scoped mo
 - **Reference reads** — per bundled file (`references/*.md`, `scripts/*`): how deep it sits below
   SKILL.md, its size and TOC, and whether transcripts read it in full, in part (`head -100`,
   Read `limit`) or only searched it, by which model; files of a used skill that are never read
+- **Saved rundowns** — store a written summary of one session's skill usage together with a
+  snapshot of its invocations, then list, search and show them later. The snapshot survives
+  Claude Code's transcript cleanup (see [Saved rundowns](#saved-rundowns))
 
 ## Prerequisites
 
@@ -82,8 +85,43 @@ skillscope refs [skill]       # per bundled file: depth, lines, TOC, full/partia
 skillscope refs <skill> --reads  # the matched tool calls as JSON lines
 skillscope export             # JSON export of normalized invocations
 
+skillscope rundown save [session] --summary-file -   # snapshot a session + summary from stdin
+skillscope rundown list|search <q>|show <session>|path
+
 skillscope summary --harness all   # include Codex, pi and opencode history (default: claude)
 ```
+
+## Saved rundowns
+
+`skillscope rundown save <session>` resolves a Claude Code session (full UUID or >=8-char hex
+prefix; default `$CLAUDE_CODE_SESSION_ID`), snapshots its invocations (main and subagent), and
+writes one JSON file:
+
+```
+$XDG_DATA_HOME/skillscope/rundowns/<session-id>/<saved-at>.json
+```
+
+`$XDG_DATA_HOME` defaults to `~/.local/share` on every platform, macOS included; empty or relative
+values are ignored, as the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir/latest/)
+requires. `SKILLSCOPE_DATA_DIR` replaces the whole directory. Files are written atomically, mode
+0600 in 0700 directories: a summary can quote anything from the session.
+
+`--summary-file PATH` (`-` for stdin) adds a Markdown summary, typically the answer an agent gave
+about that session; `--author` tags who wrote it. Each save is a new file, so a session can have
+several rundowns; `show` picks the newest.
+
+| Command | Does |
+|---|---|
+| `rundown list [--skill S] [--since 30d]` | newest first: save time, session, invocation count, project, headline |
+| `rundown search <query> [--skill S]` | case-insensitive match in summaries, then skill names, skill args, project paths |
+| `rundown show <session or file>` | the newest rundown: summary plus invocation timeline |
+| `rundown path` | the store directory |
+
+With `--json`, `list` and `search` print one object per rundown and `show` prints the full record;
+its `invocations` array has the same shape as `export`. Records carry `schema: 1`.
+
+Why it exists: Claude Code deletes transcripts after `cleanupPeriodDays` (see below), and with
+them every invocation record. A saved rundown keeps both the numbers and the reading of them.
 
 ## Releases
 
@@ -200,6 +238,7 @@ src/
 ├── inventory.rs             # installed-skill inventory join
 ├── skilltree.rs             # skill dir walk: bundled files, links, depth, lint rules
 ├── refreads.rs              # bundled-file reads + extent (full/partial/search) per tool call
+├── rundown.rs               # saved session rundowns: XDG store, snapshot, search
 ├── cli.rs                    # clap subcommands + global flags
 └── tui/                       # ratatui: global + session-scoped drill-down views
 ```

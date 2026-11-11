@@ -6,10 +6,10 @@
 //! the Rust rewrite's subagent-transcript feature.
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TriggerType {
     /// `<command-name>/foo</command-name>` in a `type:"user"` line.
     #[serde(rename = "user-slash")]
@@ -50,7 +50,7 @@ impl fmt::Display for TriggerType {
 /// Per-trigger-type counts, shared by every aggregation that breaks a
 /// total down by how the skill fired. Flattened into JSON output so each
 /// count stays a top-level field.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TriggerCounts {
     pub user_slash: usize,
     pub user_named: usize,
@@ -70,7 +70,7 @@ impl TriggerCounts {
 }
 
 /// Which agent harness recorded the invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Harness {
     /// Claude Code — `~/.claude/projects/**/*.jsonl`.
@@ -94,7 +94,7 @@ impl fmt::Display for Harness {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Origin {
     /// Recorded in a top-level `<project>/<session-uuid>.jsonl` transcript.
     #[serde(rename = "main")]
@@ -113,7 +113,7 @@ impl fmt::Display for Origin {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillInvocation {
     pub skill_name: String,
     pub trigger_type: TriggerType,

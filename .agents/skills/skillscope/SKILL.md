@@ -1,7 +1,7 @@
 ---
 name: skillscope
-version: 1.3.0
-description: "Analyze skill-invocation history from local Claude Code (+ Codex, pi, opencode) transcripts with the `skillscope` CLI: what fired, when, how. Use for \"what skills did session X invoke\", \"is my-skill firing\", project/time surveys, linting skills, whether references get read in full. Read-only."
+version: 1.4.0
+description: "Analyze skill-invocation history from local Claude Code (+ Codex, pi, opencode) transcripts with the `skillscope` CLI: what fired, when, how. Use for \"what skills did session X invoke\", \"is my-skill firing\", project/time surveys, linting skills, whether references get read in full, and finding past session rundowns. Reads transcripts; writes only its own local rundown store."
 ---
 
 # skillscope
@@ -71,6 +71,45 @@ Present it as a chronological timeline: timestamp → skill → trigger type, wi
 context for why it fired. Call out the trigger split explicitly — that's the "how" the user asked
 for. If the prefix matches more than one `session_id`, stop and report the
 candidates (don't silently pick one).
+
+Invoked as `/skillscope` with no arguments inside a session, the question is "this session":
+use `$CLAUDE_CODE_SESSION_ID` as the session.
+
+### Save the rundown (always, after a session question)
+
+After you answer a question about one Claude Code session, save your answer with the session's
+invocation snapshot. Do it without asking: it writes only to skillscope's own local store, and the
+snapshot outlives the transcript, which Claude Code deletes after `cleanupPeriodDays`.
+
+```bash
+skillscope rundown save "$SESSION" --author "<who wrote it>" --summary-file - <<'EOF'
+<the rundown you just gave the user, as Markdown>
+EOF
+```
+
+- `$SESSION` is the full id or a >=8-char hex prefix; omit it to use `$CLAUDE_CODE_SESSION_ID`.
+- `--author`: what wrote the summary, e.g. the agent's session trailer. Optional.
+- Saving again for the same session adds a new file; `show` returns the newest.
+- The store is plaintext under `$XDG_DATA_HOME/skillscope/rundowns/` (default
+  `~/.local/share/skillscope/rundowns/`; `SKILLSCOPE_DATA_DIR` overrides it). Leave secrets out of
+  the summary.
+- Claude Code transcripts only: there is no session resolver for the other harnesses yet.
+
+### "What did we find out about session X before?" / "Which sessions used Y?"
+
+```bash
+skillscope rundown list                         # newest first: saved, session, invocations, headline
+skillscope rundown list --skill todo --since 30d
+skillscope rundown search "rate limit"          # summaries, skill names, skill args, project paths
+skillscope rundown show abc12345                # newest rundown: summary + invocation timeline
+skillscope rundown show abc12345 --json | jq '.invocations[] | {timestamp, skill_name, trigger_type}'
+skillscope rundown path                         # where the store is
+```
+
+`list --json` and `search --json` print one JSON object per rundown (`path`, `saved_at`,
+`session_id`, `project_path`, `invocations`, `skills`, `headline`, `author`, plus `match` for
+search). `show --json` prints the whole record, including the `invocations` snapshot in the same
+shape as `export`. Check here before telling a user that an old session's history is gone.
 
 ### "How often did each trigger type fire in that session?"
 
@@ -165,6 +204,7 @@ command themselves.
 - **Timestamps are UTC.** Say so if local time matters to the user.
 - **Mind retention.** Claude Code deletes transcripts older than `cleanupPeriodDays` (default 30) at
   startup, so history older than that window is already gone from disk — flag this when a user asks
-  about long-range trends and the data looks truncated.
+  about long-range trends and the data looks truncated. Saved rundowns (`skillscope rundown`) keep
+  their sessions' invocations past that window.
 - **Don't fabricate.** If a session prefix matches nothing, or a skill has zero invocations, say so
   plainly rather than guessing.

@@ -55,6 +55,7 @@ fn main() {
             by_model,
             reads,
         }) => skillscope::cli::cmd_refs(&cli, skill.as_deref(), skills_dirs, *by_model, *reads),
+        Some(Command::Rundown { action }) => skillscope::cli::cmd_rundown(&cli, action),
     }
 }
 
