@@ -127,10 +127,14 @@ them every invocation record. A saved rundown keeps both the numbers and the rea
 
 Every merge to `main` releases. `.github/workflows/release.yml` picks the next version (minor
 bump if any `feat` commit since the last `v*` tag, else patch; docs-only merges skip; a PR that
-already bumped `Cargo.toml` past the last tag sets the version), commits the `Cargo.toml` /
-`Cargo.lock` bump to `main` as `chore(release): vX.Y.Z`, tags it, then builds, all on `ubuntu-latest`, `aarch64-apple-darwin` (cross-built with cargo-zigbuild, ad-hoc signed by zig's linker) and `x86_64-unknown-linux-musl` (static,
+already bumped `Cargo.toml` past the last tag sets the version) and pushes only that tag: `main`
+accepts changes through pull requests only, so the workflow never commits to it. The build job
+stamps the tag's version into `Cargo.toml` and `Cargo.lock` in its own checkout, so
+`skillscope --version` matches the tag while the committed version stays a floor (bump it in a
+PR to force a version). It then builds, all on `ubuntu-latest`, `aarch64-apple-darwin` (cross-built with cargo-zigbuild, ad-hoc signed by zig's linker) and `x86_64-unknown-linux-musl` (static,
 any glibc), publishes a GitHub Release, and pushes `Formula/skillscope.rb` to
-`plinde/homebrew-tap-private` (needs the `TAP_GITHUB_TOKEN` secret); `brew upgrade` picks it up.
+`plinde/homebrew-tap-private` (needs the `TAP_GITHUB_TOKEN` secret); `brew upgrade` picks it up,
+and the hosts' hourly `plinde-homebrew-upgrade` job (plinde/cron-launchagent) installs it.
 PRs that touch the build inputs run the builds only. `workflow_dispatch` releases if `main` has
 unreleased changes, else builds only. A manual `v*` tag that matches `Cargo.toml` still releases
 exactly that tag.
