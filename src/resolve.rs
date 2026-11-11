@@ -8,7 +8,7 @@ use crate::parser::glob_main_transcripts;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-const MIN_PREFIX_LEN: usize = 8;
+pub(crate) const MIN_PREFIX_LEN: usize = 8;
 
 #[derive(Debug)]
 pub enum ResolveError {
@@ -55,7 +55,7 @@ impl fmt::Display for ResolveError {
 }
 
 /// Full session UUID: 8-4-4-4-12 lowercase/uppercase hex groups.
-fn is_full_uuid(s: &str) -> bool {
+pub(crate) fn is_full_uuid(s: &str) -> bool {
     let parts: Vec<&str> = s.split('-').collect();
     parts.len() == 5
         && [8, 4, 4, 4, 12]
@@ -64,7 +64,7 @@ fn is_full_uuid(s: &str) -> bool {
             .all(|(len, part)| part.len() == *len && part.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-fn is_hex_prefix(s: &str) -> bool {
+pub(crate) fn is_hex_prefix(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 

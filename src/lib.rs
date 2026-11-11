@@ -13,6 +13,7 @@ pub mod parser;
 pub mod refreads;
 pub mod report;
 pub mod resolve;
+pub mod rundown;
 pub mod sessions;
 pub mod sessionscan;
 pub mod skilltree;
